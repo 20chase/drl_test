@@ -9,7 +9,7 @@ dependences
 
 Run
 ------------------------------------------------
-	python cartpole.py
+	python OpenAI.py
 Some Detail
 ------------------------------------------------
     I use the Policy Gradient method to solve the RL problem.
