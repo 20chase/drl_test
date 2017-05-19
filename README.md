@@ -6,10 +6,8 @@ dependences
 ------------------------------------------------
 	tensorflow
 	tensorlayer
-
-Run
-------------------------------------------------
-	python OpenAI.py
+	gym
+	
 Some Detail
 ------------------------------------------------
     I use the Policy Gradient method to solve the RL problem.
