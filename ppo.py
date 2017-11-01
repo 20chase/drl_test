@@ -18,7 +18,7 @@ LAMBDA = 0.98
 BATCH_SIZE = 10
 MAX_EPISODES = 10000
 
-ENV_NAME = 'Swimmer-v1'
+ENV_NAME = 'Pendulum-v0'
 # ENV_NAME = 'Humanoid-v1'
 # ENV_NAME = 'InvertedPendulum-v1'
 
@@ -330,7 +330,7 @@ def build_train_set(trajectories):
 def train():
 	env = gym.make(ENV_NAME)
 	agent = PPO(env)
-	env = wrappers.Monitor(env, '/tmp/A', force=True)
+	# env = wrappers.Monitor(env, '/tmp/A', force=True)
 	run_policy(env, agent, episodes=5)
 	e = 0
 	while e < (MAX_EPISODES):
