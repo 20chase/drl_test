@@ -32,7 +32,7 @@ parser.add_argument(
     '--kl_targ', default=0.01, type=float, help='kl divergence target')
 
 parser.add_argument(
-    '--train_epochs', default=5, type=int, help='training epochs')
+    '--train_epochs', default=10, type=int, help='training epochs')
 
 parser.add_argument(
     '--batch_size', default=20, type=int, help='trianing batch size')
@@ -44,16 +44,16 @@ parser.add_argument(
     '--max_episodes', default=1000000000, type=int, help='max trianing episodes')
 
 parser.add_argument(
-    '--animate', default=True, type=bool, help='whether to animate environment')
+    '--animate', default=False, type=bool, help='whether to animate environment')
 
 parser.add_argument(
     '--save_network', default=False, type=bool, help='whether to save network')
 
 parser.add_argument(
-    '--load_network', default=True, type=bool, help='whether to load network')
+    '--load_network', default=False, type=bool, help='whether to load network')
 
 parser.add_argument(
-    '--test_algorithm', default=True, type=bool, help='wether to test algorithm')
+    '--test_algorithm', default=False, type=bool, help='wether to test algorithm')
 
 parser.add_argument(
     '--eval_algorithm', default=False, type=bool, help='whether to evaluate algorithm')
@@ -243,14 +243,23 @@ class PPO(object):
                 if kl > self.args.kl_targ * 4:
                     break
 
-        kl, entropy, surr_loss, value_loss, total_loss = self.session.run(
-            [self.kl, self.entropy, self.surr_loss, self.value_loss, self.total_loss], 
-             feed_dict)
-
         if kl > self.args.kl_targ * 2.:
             self.lr_multiplier /= 1.5
         elif kl < self.args.kl_targ / 2.:
             self.lr_multiplier *= 1.5
+
+        stats = self._visualize_stats(feed_dict, score)
+        self._visualize_tensorboard(stats)
+
+        if self.args.save_network:
+            self.save_network(self.args.model_name)
+
+        return stats
+
+    def _visualize_stats(self, feed_dict, score):
+        kl, entropy, surr_loss, value_loss, total_loss = self.session.run(
+            [self.kl, self.entropy, self.surr_loss, self.value_loss, self.total_loss], 
+             feed_dict)
 
         stats = OrderedDict()
         stats["Score"] = score
@@ -262,6 +271,9 @@ class PPO(object):
         stats["ValueLoss"] = value_loss
         stats["Loss"] = total_loss
 
+        return stats
+
+    def _visualize_tensorboard(self, stats):
         feed_dict = {
         self.score_tb: stats["Score"],
         self.lr_tb: stats["LearningRate"],
@@ -276,11 +288,6 @@ class PPO(object):
         self.time_step += 1
         summary = self.session.run(self.merge_all, feed_dict)
         self.writer.add_summary(summary, self.time_step)
-
-        if self.args.save_network:
-            self.save_network(self.args.model_name)
-
-        return stats
 
     def update_critic(self, x, y):
         num_batches = max(x.shape[0] // 256, 1)
@@ -437,7 +444,7 @@ def train():
 
         stats = agent.update_actor(obs, acts, advs, rets, score)
         # agent.update_critic(obs, rets)
-        stats["TotalStep"] = total_step / args.batch_size
+        stats["AverageStep"] = total_step / args.batch_size
         stats["Iteration"] = e
         print_stats(stats)
 
