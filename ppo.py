@@ -73,8 +73,8 @@ parser.add_argument(
 parser.add_argument(
     '--model_name', default='ppo', type=str, help='save or load model name')
 
+# global value
 args = parser.parse_args()
-
 
 class PPO(object):
     def __init__(self, env, args):
@@ -448,10 +448,6 @@ def wechat_display():
         if msg['Text'] == u'tensorboard':
             util.capture("http://127.0.0.1:6006/")
             itchat.send_image('tensorboard.png', 'filehelper')
-        if msg['Text'] == u'iter':
-            itchat.send(u'iter: '.format(1), 'filehelper')
-        if msg['Text'] == u'score':
-            itchat.send(u'score: {}'.format(1), 'filehelper')
 
     itchat.auto_login(hotReload=True)
     itchat.run()
