@@ -1,10 +1,15 @@
-This is a Reinforcement Learning program for OpenAI Gym Cartpole by ftx.
+There are some Reinforcement Learning programs by chase.
 ------------------------------------------------
-Environment: Ubuntu 14.04 LTS	     
+Environment: Ubuntu 16.04 LTS
 ------------------------------------------------
 dependences
 ------------------------------------------------
 	tensorflow
 	tensorlayer
 	gym
+	itchat
+	tabulate
+	roboschool
+	sklearn
+	selenium
 	
