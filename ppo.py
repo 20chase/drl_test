@@ -2,7 +2,10 @@
 import argparse
 import gym
 import time
+import threading
 import roboschool
+import itchat
+import util
 import scipy.signal
 
 import numpy as np
@@ -21,6 +24,9 @@ parser.add_argument(
 
 parser.add_argument(
     '--lambda_gae', default=0.98, type=float, help='lambda for GAE')
+
+parser.add_argument(
+    '--log_vars', default=0.0, type=float, help='init action log variance')
 
 parser.add_argument(
     '--eta', default=50, type=float, help='actor loss parameter')
@@ -50,7 +56,7 @@ parser.add_argument(
     '--animate', default=False, type=bool, help='whether to animate environment')
 
 parser.add_argument(
-    '--save_network', default=False, type=bool, help='whether to save network')
+    '--save_network', default=True, type=bool, help='whether to save network')
 
 parser.add_argument(
     '--load_network', default=False, type=bool, help='whether to load network')
@@ -62,7 +68,7 @@ parser.add_argument(
     '--eval_algorithm', default=False, type=bool, help='whether to evaluate algorithm')
 
 parser.add_argument(
-    '--env_name', default='RoboschoolInvertedPendulum-v1', type=str, help='gym env name')
+    '--env_name', default='RoboschoolWalker2d-v1', type=str, help='gym env name')
 
 parser.add_argument(
     '--model_name', default='ppo', type=str, help='save or load model name')
@@ -107,8 +113,8 @@ class PPO(object):
 
     def _build_network(self):
         # build actor network
-        hid1_size = self.obs_dim * 15  
-        hid3_size = self.act_dim * 15
+        hid1_size = self.obs_dim * 5  
+        hid3_size = self.act_dim * 5
         hid2_size = int(np.sqrt(hid1_size * hid3_size))
 
         self.actor_network = tl.layers.InputLayer(self.obs_ph, name = 'actor_network_input')
@@ -122,7 +128,7 @@ class PPO(object):
             W_init = tf.random_normal_initializer(stddev=np.sqrt(1.0 / float(hid3_size))), name = 'means')
 
         # build critic network
-        hid1_size = self.obs_dim * 15  
+        hid1_size = self.obs_dim * 5  
         hid3_size = 5  
         hid2_size = int(np.sqrt(hid1_size * hid3_size))
 
@@ -142,7 +148,7 @@ class PPO(object):
                                    tf.constant_initializer(0.0))
 
         self.means = self.actor_network.outputs
-        self.log_vars = tf.reduce_sum(log_vars, axis=0) - 1.0
+        self.log_vars = tf.reduce_sum(log_vars, axis=0) - self.args.log_vars
         self.value = self.critic_network.outputs
 
         # sample action from norm distributiion
@@ -235,7 +241,7 @@ class PPO(object):
         stats = self._visualize_stats(feed_dict, score)
         self._visualize_tensorboard(stats)
 
-        if self.args.save_network:
+        if self.args.save_network and self.time_step % 10 == 0.:
             self.save_network(self.args.model_name)
 
         return stats
@@ -436,8 +442,29 @@ def train():
         stats["Iteration"] = e
         print_stats(stats)
 
+def wechat_display():
+    @itchat.msg_register([itchat.content.TEXT])
+    def chat_trigger(msg):
+        if msg['Text'] == u'tensorboard':
+            util.capture("http://127.0.0.1:6006/")
+            itchat.send_image('tensorboard.png', 'filehelper')
+        if msg['Text'] == u'iter':
+            itchat.send(u'iter: '.format(1), 'filehelper')
+        if msg['Text'] == u'score':
+            itchat.send(u'score: {}'.format(1), 'filehelper')
+
+    itchat.auto_login(hotReload=True)
+    itchat.run()
+
+threads = []
+t1 = threading.Thread(target=train)
+threads.append(t1)
+t2 = threading.Thread(target=wechat_display)
+threads.append(t2)
+
 if __name__ == "__main__":
-    train()
+    for t in threads:
+        t.start()
 
 
 
