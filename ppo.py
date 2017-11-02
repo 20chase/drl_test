@@ -4,7 +4,6 @@ import gym
 import time
 import threading
 import roboschool
-import itchat
 import util
 import scipy.signal
 
@@ -442,25 +441,19 @@ def train():
         stats["Iteration"] = e
         print_stats(stats)
 
-def wechat_display():
-    @itchat.msg_register([itchat.content.TEXT])
-    def chat_trigger(msg):
-        if msg['Text'] == u'tensorboard':
-            util.capture("http://127.0.0.1:6006/")
-            itchat.send_image('tensorboard.png', 'filehelper')
+def apply_wechat():
+    threads = []
+    t1 = threading.Thread(target=train)
+    threads.append(t1)
+    t2 = threading.Thread(target=util.wechat_display)
+    threads.append(t2)
 
-    itchat.auto_login(hotReload=True)
-    itchat.run()
-
-threads = []
-t1 = threading.Thread(target=train)
-threads.append(t1)
-t2 = threading.Thread(target=wechat_display)
-threads.append(t2)
-
-if __name__ == "__main__":
     for t in threads:
         t.start()
+
+if __name__ == "__main__":
+    apply_wechat()
+    
 
 
 
