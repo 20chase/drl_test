@@ -2,6 +2,7 @@
 import argparse
 import gym
 import time
+import ray
 import threading
 import roboschool
 import util
@@ -37,7 +38,7 @@ parser.add_argument(
     '--critic_lr', default=1e-3, type=float, help='learning rate for critic')
 
 parser.add_argument(
-    '--kl_targ', default=0.01, type=float, help='kl divergence target')
+    '--kl_targ', default=0.003, type=float, help='kl divergence target')
 
 parser.add_argument(
     '--train_epochs', default=10, type=int, help='training epochs')
@@ -67,7 +68,7 @@ parser.add_argument(
     '--eval_algorithm', default=False, type=bool, help='whether to evaluate algorithm')
 
 parser.add_argument(
-    '--env_name', default='RoboschoolWalker2d-v1', type=str, help='gym env name')
+    '--env_name', default='RoboschoolInvertedPendulum-v1', type=str, help='gym env name')
 
 parser.add_argument(
     '--model_name', default='ppo', type=str, help='save or load model name')
@@ -112,8 +113,8 @@ class PPO(object):
 
     def _build_network(self):
         # build actor network
-        hid1_size = self.obs_dim * 5  
-        hid3_size = self.act_dim * 5
+        hid1_size = self.obs_dim * 10  
+        hid3_size = self.act_dim * 10
         hid2_size = int(np.sqrt(hid1_size * hid3_size))
 
         self.actor_network = tl.layers.InputLayer(self.obs_ph, name = 'actor_network_input')
@@ -127,7 +128,7 @@ class PPO(object):
             W_init = tf.random_normal_initializer(stddev=np.sqrt(1.0 / float(hid3_size))), name = 'means')
 
         # build critic network
-        hid1_size = self.obs_dim * 5  
+        hid1_size = self.obs_dim * 10  
         hid3_size = 5  
         hid2_size = int(np.sqrt(hid1_size * hid3_size))
 
@@ -343,6 +344,7 @@ class PPO(object):
             params = tl.files.load_npz(name='./model/ppo/{}_{}.npz'.format(model_name, i))
             tl.files.assign_params(self.session, params, self.model[i])
 
+@ray.remote
 def run_episode(env, agent, animate=args.animate):
     state = env.reset()
     obs, acts, rewards = [], [], []
@@ -356,24 +358,33 @@ def run_episode(env, agent, animate=args.animate):
         state, reward, done, _ = env.step(np.squeeze(action, axis=0))
         rewards.append(reward)
 
-    return (np.asarray(obs), np.asarray(acts), np.asarray(rewards))
+    obs = np.asarray(obs)
+    acts = np.asarray(acts)
+    rewards = np.asarray(rewards)
+
+    acts = np.reshape(acts, (len(rewards), agent.act_dim))
+    trajectory = {
+    'obs': obs,
+    'acts': acts,
+    'rewards': rewards
+    }
+
+    return trajectory
 
 def run_policy(env, agent, training_steps, batch_size):
     trajectories = []
-    total_step = 0
     for e in range(batch_size):
-        obs, acts, rewards = run_episode(env, agent)
-        acts = np.reshape(acts, (len(rewards), agent.act_dim))
-        total_step += len(rewards)
-        trajectory = {
-        'obs': obs,
-        'acts': acts,
-        'rewards': rewards
-        }
+        trajectory = run_episode.remote(env, agent)
         trajectories.append(trajectory)
 
+    trajectories = ray.get(trajectories)
+    print (trajectories)
+    time.sleep(10000)
+
+    
+    mean_step = np.mean([len(t['rewards']) for t in trajectories])
     score = np.mean([t['rewards'].sum() for t in trajectories])
-    return trajectories, score, total_step
+    return trajectories, score, mean_step
 
 def discount(x, gamma):
     return scipy.signal.lfilter([1.0], [1.0, -gamma], x[::-1])[::-1]
@@ -428,7 +439,7 @@ def train():
     if args.load_network:
         agent.load_network(args.model_name)
     while e < (args.max_episodes):
-        trajectories, score, total_step = run_policy(env, agent, args.training_steps, args.batch_size)
+        trajectories, score, mean_step = run_policy(env, agent, args.training_steps, args.batch_size)
         e += len(trajectories)
         add_value(trajectories, agent)
         add_disc_sum_rew(trajectories, args.gamma)
@@ -437,7 +448,7 @@ def train():
 
         stats = agent.update_actor(obs, acts, advs, rets, score)
         agent.update_critic(obs, rets)
-        stats["AverageStep"] = total_step / args.batch_size
+        stats["AverageStep"] = mean_step
         stats["Iteration"] = e
         print_stats(stats)
 
@@ -452,7 +463,8 @@ def apply_wechat():
         t.start()
 
 if __name__ == "__main__":
-    apply_wechat()
+    ray.init(num_workers=4)
+    train()
     
 
 
