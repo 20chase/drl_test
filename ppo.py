@@ -53,22 +53,22 @@ parser.add_argument(
     '--max_episodes', default=1000000000, type=int, help='max trianing episodes')
 
 parser.add_argument(
-    '--animate', default=False, type=bool, help='whether to animate environment')
+    '--animate', default=True, type=bool, help='whether to animate environment')
 
 parser.add_argument(
-    '--save_network', default=True, type=bool, help='whether to save network')
+    '--save_network', default=False, type=bool, help='whether to save network')
 
 parser.add_argument(
-    '--load_network', default=False, type=bool, help='whether to load network')
+    '--load_network', default=True, type=bool, help='whether to load network')
 
 parser.add_argument(
-    '--test_algorithm', default=False, type=bool, help='wether to test algorithm')
+    '--test_algorithm', default=True, type=bool, help='wether to test algorithm')
 
 parser.add_argument(
     '--eval_algorithm', default=False, type=bool, help='whether to evaluate algorithm')
 
 parser.add_argument(
-    '--env_name', default='RoboschoolInvertedPendulum-v1', type=str, help='gym env name')
+    '--env_name', default='RoboschoolAnt-v1', type=str, help='gym env name')
 
 parser.add_argument(
     '--model_name', default='ppo', type=str, help='save or load model name')
@@ -344,7 +344,7 @@ class PPO(object):
             params = tl.files.load_npz(name='./model/ppo/{}_{}.npz'.format(model_name, i))
             tl.files.assign_params(self.session, params, self.model[i])
 
-@ray.remote
+# @ray.remote
 def run_episode(env, agent, animate=args.animate):
     state = env.reset()
     obs, acts, rewards = [], [], []
@@ -374,12 +374,8 @@ def run_episode(env, agent, animate=args.animate):
 def run_policy(env, agent, training_steps, batch_size):
     trajectories = []
     for e in range(batch_size):
-        trajectory = run_episode.remote(env, agent)
+        trajectory = run_episode(env, agent)
         trajectories.append(trajectory)
-
-    trajectories = ray.get(trajectories)
-    print (trajectories)
-    time.sleep(10000)
 
     
     mean_step = np.mean([len(t['rewards']) for t in trajectories])
@@ -463,8 +459,10 @@ def apply_wechat():
         t.start()
 
 if __name__ == "__main__":
-    ray.init(num_workers=4)
+    # ray.init(num_workers=4)
     train()
+    # apply_wechat()
+    # util.wechat_display()
     
 
 
