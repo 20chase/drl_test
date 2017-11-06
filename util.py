@@ -45,3 +45,6 @@ def wechat_display():
 
     itchat.auto_login(hotReload=True)
     itchat.run()
+
+if __name__ == '__main__':
+    wechat_display()
