@@ -6,6 +6,8 @@ import numpy as np
 import tensorflow as tf
 import tensorlayer as tl
 
+from collections import defaultdict
+
 class Agent(object):
     def __init__(self, env):
         self.init_param(env)
@@ -46,72 +48,66 @@ class RayEnvironment(object):
         self.build_envs()
         
     def build_envs(self):
-        envs = [self.make_env.remote() for _ in range(self.num_workers)]
-        self.envs = ray.get(envs)
-
+        self.envs = [gym.make(self.env_name) for _ in range(self.num_workers)]
+        
     def reset(self):
-        states = [self.env_reset.remote(self.envs[i]) for i in range(self.num_workers)]
+        @ray.remote
+        def env_reset(env):
+            return env.reset()
+
+        states = [env_reset.remote(self.envs[i]) for i in range(self.num_workers)]
         states = ray.get(states)
         return states
 
     def step(self, states):
-        next_step = [self.env_step.remote(states[i]) for i in range(self.num_workers)]
+        @ray.remote
+        def env_step(env, state):
+            return env.step(state) 
+
+        next_step = [env_step.remote(self.envs[i], states[i]) for i in range(self.num_workers)]
         next_step = ray.get(next_step)
-        
+
         states = [batch[0] for batch in next_step]
         rewards = [batch[1] for batch in next_step]
         dones = [batch[2] for batch in next_step]
 
         return [states, rewards, dones]
 
-    @ray.remote
-    def make_env(self):
-        return gym.make(self.env_name)
-
-    @ray.remote
-    def env_reset(self, env):
-        return env.reset()
-
-    @ray.remote
-    def env_step(self, state):
-        return env.step(state)     
+    
 
 def run_episode(env, agent):
-    dones = [False for _ in range(env.num_workers)]
-    dones_idxs = [0 for _ in range(env.num_workers)]
+    terminates = [False for _ in range(env.num_workers)]
+    terminates_idxs = [0 for _ in range(env.num_workers)]
 
-    obs, acts, rews = [], [], []
+    paths = defaultdict(list)
 
     states = env.reset()
-    while not all(dones):
-        obs.append(states)
+    while not all(terminates):
+        paths["states"].append(states)
+
         actions = agent.take_action(states)
-        acts.append(actions)
+        paths["actions"].append(actions)
 
-        
-        
+        states, rewards, dones = env.step(actions)
+        paths["rewards"].append(rewards)
 
-        rewards.append(reward)
+        for i, d in enumerate(dones):
+            if d:
+                terminates[i] = True
+            else:
+                terminates_idxs[i] += 1
 
-    obs = np.asarray(obs)
-    acts = np.asarray(acts)
-    rewards = np.asarray(rewards)
-
-    trajectory = {
-    'obs': obs,
-    'acts': acts,
-    'rewards': rewards
-    }
-
-    return total_rewards
+    return paths
 
 if __name__ == '__main__':
     ray.init()
     env = 'Pendulum-v0'
     agent = Agent(env)
-    ray_env = RayEnvironment(env, 4)
+    ray_env = RayEnvironment(env, 2)
+
+    # print ('end')
     trajectories = run_episode(ray_env, agent)
-    print (trajectories)
+    # print (trajectories)
 
 
 

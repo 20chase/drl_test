@@ -23,6 +23,9 @@ parser.add_argument(
     '--lambda_gae', default=0.98, type=float, help='lambda for GAE')
 
 parser.add_argument(
+    '--log_vars', default=1.0, type=float, help='init action log variance')
+
+parser.add_argument(
     '--epsilon', default=0.2, type=float, help='cliped parameter')
 
 parser.add_argument(
@@ -47,7 +50,7 @@ parser.add_argument(
     '--animate', default=False, type=bool, help='whether to animate environment')
 
 parser.add_argument(
-    '--save_network', default=False, type=bool, help='whether to save network')
+    '--save_network', default=True, type=bool, help='whether to save network')
 
 parser.add_argument(
     '--load_network', default=False, type=bool, help='whether to load network')
@@ -59,7 +62,7 @@ parser.add_argument(
     '--eval_algorithm', default=False, type=bool, help='whether to evaluate algorithm')
 
 parser.add_argument(
-    '--env_name', default='RoboschoolInvertedPendulum-v1', type=str, help='gym env name')
+    '--env_name', default='RoboschoolAnt-v1', type=str, help='gym env name')
 
 parser.add_argument(
     '--model_name', default='ppo_clip', type=str, help='save or load model name')
@@ -103,66 +106,52 @@ class PPO(object):
                                            'old_means')
 
     def _build_network(self):
-        # define network
-        self.network = tl.layers.InputLayer(self.obs_ph, 
-                                            name='network_input')
-        self.network = tl.layers.DenseLayer(self.network,
-                                            n_units=100,
-                                            act=tf.nn.relu,
-                                            W_init=tf.random_normal_initializer(stddev=np.sqrt(1.0/self.obs_dim)),
-                                            name='actor_relu1')
-        self.network = tl.layers.DenseLayer(self.network,
-                                            n_units=50,
-                                            act=tf.nn.relu,
-                                            W_init=tf.random_normal_initializer(stddev=np.sqrt(1.0/float(100))),
-                                            name='actor_relu2')
-        self.network = tl.layers.DenseLayer(self.network,
-                                            n_units=25,
-                                            act=tf.nn.relu,
-                                            W_init=tf.random_normal_initializer(stddev=np.sqrt(1.0/float(50))),
-                                            name='actor_relu3')
-        self.network = tl.layers.DenseLayer(self.network,
-                                            n_units=self.act_dim,
-                                            act=tf.nn.tanh,
-                                            W_init=tf.random_normal_initializer(stddev=np.sqrt(1.0/float(25))),
-                                            name='means')
+        # build actor network
+        hid1_size = self.obs_dim * 10  
+        hid3_size = self.act_dim * 10
+        hid2_size = int(np.sqrt(hid1_size * hid3_size))
 
-        self.value_network = tl.layers.InputLayer(self.obs_ph,
-                                                  name='value_network_input')
-        self.value_network = tl.layers.DenseLayer(self.value_network,
-                                                  n_units=100,
-                                                  act=tf.nn.relu,
-                                                  name='critic_relu1'
-                                                  )
-        self.value_network = tl.layers.DenseLayer(self.value_network,
-                                                  n_units=50,
-                                                  act=tf.nn.relu,
-                                                  name='critic_relu2'
-                                                  )
-        self.value_network = tl.layers.DenseLayer(self.value_network,
-                                                  n_units=25,
-                                                  act=tf.nn.relu,
-                                                  name='critic_relu3'
-                                                  )
-        self.value_network = tl.layers.DenseLayer(self.value_network,
-                                                  n_units=1,
-                                                  name='value_output')
-        
+        self.actor_network = tl.layers.InputLayer(self.obs_ph, name = 'actor_network_input')
+        self.actor_network = tl.layers.DenseLayer(self.actor_network, n_units = hid1_size, act = tf.nn.tanh, 
+            W_init = tf.random_normal_initializer(stddev=np.sqrt(1.0 / self.obs_dim)), name = 'actor_tanh1')
+        self.actor_network = tl.layers.DenseLayer(self.actor_network, n_units = hid2_size, act = tf.nn.tanh,
+            W_init = tf.random_normal_initializer(stddev=np.sqrt(1.0 / float(hid1_size))), name = 'actor_tanh2')
+        self.actor_network = tl.layers.DenseLayer(self.actor_network, n_units = hid3_size, act = tf.nn.tanh, 
+            W_init = tf.random_normal_initializer(stddev=np.sqrt(1.0 / float(hid2_size))), name = 'actor_tanh3')
+        self.actor_network = tl.layers.DenseLayer(self.actor_network, n_units = self.act_dim, act = tf.nn.tanh,
+            W_init = tf.random_normal_initializer(stddev=np.sqrt(1.0 / float(hid3_size))), name = 'means')
 
-        logvar_speed = 30
-        log_vars = tf.get_variable('logvars', (logvar_speed, self.act_dim),
-                                   tf.float32, tf.constant_initializer(0.0))
+        # build critic network
+        hid1_size = self.obs_dim * 10  
+        hid3_size = 5  
+        hid2_size = int(np.sqrt(hid1_size * hid3_size))
 
-        self.log_vars = tf.reduce_sum(log_vars, axis=0)-1.
-        self.means = self.network.outputs
-        self.value = self.value_network.outputs
+        self.critic_network = tl.layers.InputLayer(self.obs_ph, name = 'critic_network_input')
+        self.critic_network = tl.layers.DenseLayer(self.critic_network, n_units = hid1_size, act = tf.nn.tanh, 
+            W_init = tf.random_normal_initializer(stddev=np.sqrt(1.0 / self.obs_dim)), name = 'critic_tanh1')
+        self.critic_network = tl.layers.DenseLayer(self.critic_network, n_units = hid2_size, act = tf.nn.tanh,
+            W_init = tf.random_normal_initializer(stddev=np.sqrt(1.0 / float(hid1_size))), name = 'critic_tanh2')
+        self.critic_network = tl.layers.DenseLayer(self.critic_network, n_units = hid3_size, act = tf.nn.tanh, 
+            W_init = tf.random_normal_initializer(stddev=np.sqrt(1.0 / float(hid2_size))), name = 'critic_tanh3')
+        self.critic_network = tl.layers.DenseLayer(self.critic_network, n_units = 1, act = tf.nn.tanh,
+            W_init = tf.random_normal_initializer(stddev=np.sqrt(1.0 / float(hid3_size))), name = 'value')
 
+        # build variance network
+        logvar_speed = (10 * hid3_size) // 48
+        log_vars = tf.get_variable('logvars', (logvar_speed, self.act_dim), tf.float32,
+                                   tf.constant_initializer(0.0))
+
+        self.means = self.actor_network.outputs
+        self.log_vars = tf.reduce_sum(log_vars, axis=0) - self.args.log_vars
+        self.value = self.critic_network.outputs
+
+        # sample action from norm distributiion
         with tf.variable_scope('sample_action'):
             self.sampled_act = (self.means +
-                                tf.exp(self.log_vars/2.0) *
+                                tf.exp(self.log_vars / 2.0) *
                                 tf.random_normal(shape=(self.act_dim,)))
 
-        return [self.network, self.value_network]
+        return [self.actor_network, self.critic_network]
 
     def _build_training(self):
         # logprob
@@ -251,7 +240,7 @@ class PPO(object):
         stats = self._visualize_stats(feed_dict, score)
         self._visualize_tensorboard(stats)
 
-        if self.args.save_network:
+        if self.args.save_network and self.time_step % 10 == 0.:
             self.save_network(self.args.model_name)
 
         return stats
