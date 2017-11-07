@@ -105,6 +105,8 @@ class PPO(object):
         self.old_means_ph = tf.placeholder(tf.float32, [None, self.act_dim],
                                            'old_means')
 
+        self.old_vf_loss_ph = tf.placeholder(tf.float32, name='old_vf_loss_ph')
+
     def _build_network(self):
         # build actor network
         hid1_size = self.obs_dim * 10  
@@ -177,7 +179,12 @@ class PPO(object):
             self.surr_loss = -tf.reduce_mean(tf.minimum(surr1, surr2))
 
         with tf.variable_scope('value_loss'):
-            self.value_loss = tf.reduce_mean(tf.square(self.value-self.ret_ph))
+            vf_loss1 = tf.square(self.value - self.ret_ph)
+            vf_clipped = self.old_vf_loss_ph + tf.clip_by_value(
+                self.value - self.old_vf_loss_ph, -self.epsilon_ph, self.epsilon_ph)
+            vf_loss2 = tf.square(vf_clipped - self.ret_ph)
+            self.value_loss = tf.reduce_mean(tf.minimum(vf_loss1, vf_loss2))
+            self.old_value_loss = tf.reduce_mean(vf_loss1)
 
         with tf.variable_scope('total_loss'):
             self.total_loss = self.surr_loss + 1.0 * self.value_loss + 0.0 * self.entropy
@@ -220,10 +227,12 @@ class PPO(object):
         self.epsilon_ph: self.args.epsilon * self.lr_multiplier
         }
 
-        old_means_np, old_log_vars_np = self.session.run([self.means, self.log_vars],
-                                                      feed_dict)
+        old_means_np, old_log_vars_np, old_vf_loss = self.session.run(
+            [self.means, self.log_vars, self.old_value_loss], feed_dict)
+
         feed_dict[self.old_log_vars_ph] = old_log_vars_np
         feed_dict[self.old_means_ph] = old_means_np
+        feed_dict[self.old_vf_loss_ph] = old_vf_loss
 
         if not self.args.test_algorithm:
             for e in range(self.args.train_epochs):
