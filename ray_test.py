@@ -1,6 +1,8 @@
 #! /usr/bin/env python3
 import ray
 import gym
+import time
+import roboschool
 
 import numpy as np
 import tensorflow as tf
@@ -39,56 +41,50 @@ class Agent(object):
         self.act_dim = env.action_space.shape[0]
         self.act_high = env.action_space.high
 
-
+@ray.remote
 class RayEnvironment(object):
-    def __init__(self, env_name, num_workers):
-        self.env_name = env_name
-        self.num_workers = num_workers
+    def __init__(self, env):
+        self.env = env
+        state = self.env.reset()
+        self.shape = state.shape
 
-        self.build_envs()
-        
-    def build_envs(self):
-        self.envs = [gym.make(self.env_name) for _ in range(self.num_workers)]
-        
+    def step(self, action):
+        if self.done:
+            return [np.zeros(self.shape), 0.0, True]
+        else:
+            state, reward, done, info = self.env.step(action)
+            self.done = done
+            return [state, reward, done]
+
     def reset(self):
-        @ray.remote
-        def env_reset(env):
-            return env.reset()
-
-        states = [env_reset.remote(self.envs[i]) for i in range(self.num_workers)]
-        states = ray.get(states)
-        return states
-
-    def step(self, states):
-        @ray.remote
-        def env_step(env, state):
-            return env.step(state) 
-
-        next_step = [env_step.remote(self.envs[i], states[i]) for i in range(self.num_workers)]
-        next_step = ray.get(next_step)
-
-        states = [batch[0] for batch in next_step]
-        rewards = [batch[1] for batch in next_step]
-        dones = [batch[2] for batch in next_step]
-
-        return [states, rewards, dones]
-
+        self.done = False
+        return self.env.reset()
+        
     
-
-def run_episode(env, agent):
-    terminates = [False for _ in range(env.num_workers)]
-    terminates_idxs = [0 for _ in range(env.num_workers)]
+def run_episode(envs, agent):
+    terminates = [False for _ in range(len(envs))]
+    terminates_idxs = [0 for _ in range(len(envs))]
 
     paths = defaultdict(list)
 
-    states = env.reset()
+    states = [env.reset.remote() for env in envs]
+    states = ray.get(states)
+    print (states)
     while not all(terminates):
         paths["states"].append(states)
 
         actions = agent.take_action(states)
         paths["actions"].append(actions)
 
-        states, rewards, dones = env.step(actions)
+        next_step = [env.step.remote(actions[i]) for i, env in enumerate(envs)]
+        next_step = ray.get(next_step)
+
+        print (next_step)
+
+        states = [batch[0] for batch in next_step]
+        rewards = [batch[1] for batch in next_step]
+        dones = [batch[2] for batch in next_step]
+
         paths["rewards"].append(rewards)
 
         for i, d in enumerate(dones):
@@ -101,12 +97,14 @@ def run_episode(env, agent):
 
 if __name__ == '__main__':
     ray.init()
-    env = 'Pendulum-v0'
-    agent = Agent(env)
-    ray_env = RayEnvironment(env, 2)
+    # env_name = 'Pendulum-v0'
+    env_name = 'RoboschoolAnt-v1'
+    envs = [gym.make(env_name) for _ in range(2)]
+    agent = Agent(env_name)
+    envs = [RayEnvironment.remote(envs[i]) for i in range(2)]
 
     # print ('end')
-    trajectories = run_episode(ray_env, agent)
+    trajectories = run_episode(envs, agent)
     # print (trajectories)
 
 

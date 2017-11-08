@@ -41,6 +41,9 @@ parser.add_argument(
     '--kl_targ', default=0.003, type=float, help='kl divergence target')
 
 parser.add_argument(
+    '--nums_worker', default=8, type=int, help='number of workers')
+
+parser.add_argument(
     '--train_epochs', default=10, type=int, help='training epochs')
 
 parser.add_argument(
@@ -53,16 +56,16 @@ parser.add_argument(
     '--max_episodes', default=1000000000, type=int, help='max trianing episodes')
 
 parser.add_argument(
-    '--animate', default=True, type=bool, help='whether to animate environment')
+    '--animate', default=False, type=bool, help='whether to animate environment')
 
 parser.add_argument(
     '--save_network', default=False, type=bool, help='whether to save network')
 
 parser.add_argument(
-    '--load_network', default=True, type=bool, help='whether to load network')
+    '--load_network', default=False, type=bool, help='whether to load network')
 
 parser.add_argument(
-    '--test_algorithm', default=True, type=bool, help='wether to test algorithm')
+    '--test_algorithm', default=False, type=bool, help='wether to test algorithm')
 
 parser.add_argument(
     '--eval_algorithm', default=False, type=bool, help='whether to evaluate algorithm')
@@ -299,7 +302,7 @@ class PPO(object):
         self.writer.add_summary(summary, self.time_step)
 
     def sample(self, obs):
-        obs = np.reshape(obs, (1, self.obs_dim))
+        # obs = np.reshape(obs, (1, self.obs_dim))
         feed_dict = {self.obs_ph: obs}
         if self.args.test_algorithm:
             return self.session.run(self.means, feed_dict=feed_dict)
@@ -344,40 +347,90 @@ class PPO(object):
             params = tl.files.load_npz(name='./model/ppo/{}_{}.npz'.format(model_name, i))
             tl.files.assign_params(self.session, params, self.model[i])
 
-# @ray.remote
-def run_episode(env, agent, animate=args.animate):
-    state = env.reset()
-    obs, acts, rewards = [], [], []
-    done = False
-    while not done:
-        if animate:
-            env.render()
-        obs.append(state)
-        action = agent.sample(state).reshape((1, -1)).astype(np.float32)
-        acts.append(action)
-        state, reward, done, _ = env.step(np.squeeze(action, axis=0))
-        rewards.append(reward)
 
-    obs = np.asarray(obs)
-    acts = np.asarray(acts)
-    rewards = np.asarray(rewards)
+@ray.remote
+class RayEnvironment(object):
+    def __init__(self, env):
+        self.env = env
+        state = self.env.reset()
+        self.shape = state.shape
 
-    acts = np.reshape(acts, (len(rewards), agent.act_dim))
-    trajectory = {
-    'obs': obs,
-    'acts': acts,
-    'rewards': rewards
-    }
+    def step(self, action):
+        if self.done:
+            return [np.zeros(self.shape), 0.0, True]
+        else:
+            state, reward, done, info = self.env.step(action)
+            self.done = done
+            return [state, reward, done]
 
-    return trajectory
+    def reset(self):
+        self.done = False
+        return self.env.reset()
 
-def run_policy(env, agent, training_steps, batch_size):
-    trajectories = []
-    for e in range(batch_size):
-        trajectory = run_episode(env, agent)
+def run_episode(envs, agent, trajectories, animate=args.animate):
+    terminates = [False for _ in range(len(envs))]
+    terminates_idxs = [0 for _ in range(len(envs))]
+
+    paths_obs, paths_act, paths_rew = [], [], []
+
+    states = [env.reset.remote() for env in envs]
+    states = ray.get(states)
+
+    while not all(terminates):
+        # if animate:
+        #     env.render()
+        paths_obs.append(states)
+        actions = agent.sample(states)
+        paths_act.append(actions)
+        next_step = [env.step.remote(actions[i]) for i, env in enumerate(envs)]
+        next_step = ray.get(next_step)
+
+        states = [batch[0] for batch in next_step]
+        rewards = [batch[1] for batch in next_step]
+        dones = [batch[2] for batch in next_step]
+
+        paths_rew.append(rewards)
+
+        for i, d in enumerate(dones):
+            if d:
+                terminates[i] = True
+            else:
+                terminates_idxs[i] += 1
+
+    for i in range(len(envs)):
+        obs = []
+        acts = []
+        rews = []
+
+        for j in range(len(paths_rew)):
+            obs.append(paths_obs[j][i])
+            acts.append(paths_act[j][i])
+            rews.append(paths_rew[j][i])
+            if terminates_idxs[i] == j:
+                break
+
+        obs = np.asarray(obs)
+        acts = np.asarray(acts)
+        rews = np.asarray(rews)
+
+        acts = np.reshape(acts, (len(rews), agent.act_dim))
+        trajectory = {
+        'obs': obs,
+        'acts': acts,
+        'rewards': rews
+        }
+
         trajectories.append(trajectory)
 
-    
+
+    return trajectories
+
+def run_policy(envs, agent, training_steps, batch_size):
+    trajectories = []
+
+    for e in range((batch_size // args.nums_worker) + 1):
+        trajectories = run_episode(envs, agent, trajectories)
+
     mean_step = np.mean([len(t['rewards']) for t in trajectories])
     score = np.mean([t['rewards'].sum() for t in trajectories])
     return trajectories, score, mean_step
@@ -432,10 +485,13 @@ def train():
         env = wrappers.Monitor(env, './model/{}'.format(args.model_name), force=True)
     e = 0
 
+    envs = [gym.make(args.env_name) for _ in range(args.nums_worker)]
+    envs = [RayEnvironment.remote(envs[i]) for i in range(args.nums_worker)]
+
     if args.load_network:
         agent.load_network(args.model_name)
     while e < (args.max_episodes):
-        trajectories, score, mean_step = run_policy(env, agent, args.training_steps, args.batch_size)
+        trajectories, score, mean_step = run_policy(envs, agent, args.training_steps, args.batch_size)
         e += len(trajectories)
         add_value(trajectories, agent)
         add_disc_sum_rew(trajectories, args.gamma)
@@ -459,7 +515,7 @@ def apply_wechat():
         t.start()
 
 if __name__ == "__main__":
-    # ray.init(num_workers=4)
+    ray.init()
     train()
     # apply_wechat()
     # util.wechat_display()
