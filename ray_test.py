@@ -69,7 +69,7 @@ def run_episode(envs, agent):
 
     states = [env.reset.remote() for env in envs]
     states = ray.get(states)
-    print (states)
+    # print (states)
     while not all(terminates):
         paths["states"].append(states)
 
@@ -79,7 +79,7 @@ def run_episode(envs, agent):
         next_step = [env.step.remote(actions[i]) for i, env in enumerate(envs)]
         next_step = ray.get(next_step)
 
-        print (next_step)
+        # print (next_step)
 
         states = [batch[0] for batch in next_step]
         rewards = [batch[1] for batch in next_step]
@@ -97,15 +97,16 @@ def run_episode(envs, agent):
 
 if __name__ == '__main__':
     ray.init()
-    # env_name = 'Pendulum-v0'
-    env_name = 'RoboschoolAnt-v1'
-    envs = [gym.make(env_name) for _ in range(2)]
+    env_name = 'Pendulum-v0'
+    # env_name = 'RoboschoolAnt-v1'
+    envs = [gym.make(env_name) for _ in range(8)]
     agent = Agent(env_name)
     envs = [RayEnvironment.remote(envs[i]) for i in range(2)]
 
-    # print ('end')
-    trajectories = run_episode(envs, agent)
-    # print (trajectories)
+    for i in range(100000):
+        trajectories = run_episode(envs, agent)
+        print (i)
+
 
 
 
