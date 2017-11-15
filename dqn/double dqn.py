@@ -1,12 +1,12 @@
-import tensorflow as tf
-import tensorlayer as tl
 import gym
+import random
 
 import numpy as np
-import random
-import os
+import tensorflow as tf
+import tensorlayer as tl
+
 from gym import wrappers
-from collections import deque
+
 
 # Hyper Parameters for DQN
 GAMMA = 0.99 # discount factor for target Q

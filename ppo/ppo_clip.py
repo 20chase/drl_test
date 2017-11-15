@@ -2,10 +2,7 @@
 import argparse
 import gym
 import time
-import ray
-import threading
 import roboschool
-import util
 import scipy.signal
 
 import numpy as np
@@ -17,7 +14,7 @@ from gym import wrappers
 from collections import OrderedDict
 from sklearn.utils import shuffle
 
-parser = argparse.ArgumentParser(description='ppo adaptive KL algorithm')
+parser = argparse.ArgumentParser(description='cliped ppo algorithm')
 
 parser.add_argument(
     '--gamma', default=0.995, type=float, help='gamma')
@@ -26,22 +23,16 @@ parser.add_argument(
     '--lambda_gae', default=0.98, type=float, help='lambda for GAE')
 
 parser.add_argument(
-    '--log_vars', default=0.0, type=float, help='init action log variance')
+    '--log_vars', default=1.0, type=float, help='init action log variance')
 
 parser.add_argument(
-    '--eta', default=50, type=float, help='actor loss parameter')
+    '--epsilon', default=0.2, type=float, help='cliped parameter')
 
 parser.add_argument(
-    '--actor_lr', default=3e-4, type=float, help='learning rate for actor')
+    '--lr', default=3e-4, type=float, help='learning rate')
 
 parser.add_argument(
-    '--critic_lr', default=1e-3, type=float, help='learning rate for critic')
-
-parser.add_argument(
-    '--kl_targ', default=0.003, type=float, help='kl divergence target')
-
-parser.add_argument(
-    '--nums_worker', default=8, type=int, help='number of workers')
+    '--kl_targ', default=0.01, type=float, help='kl divergence target')
 
 parser.add_argument(
     '--train_epochs', default=10, type=int, help='training epochs')
@@ -74,10 +65,10 @@ parser.add_argument(
     '--env_name', default='RoboschoolAnt-v1', type=str, help='gym env name')
 
 parser.add_argument(
-    '--model_name', default='ppo', type=str, help='save or load model name')
+    '--model_name', default='ppo_clip', type=str, help='save or load model name')
 
-# global value
 args = parser.parse_args()
+
 
 class PPO(object):
     def __init__(self, env, args):
@@ -86,11 +77,11 @@ class PPO(object):
 
         self._build_ph()
         self.model = self._build_network()
-        self._build_trainning()
+        self._build_training()
         self._build_summary()
 
         self.merge_all = tf.summary.merge_all()
-        self.writer = tf.summary.FileWriter('./tensorboard/ppo/{}'.format(
+        self.writer = tf.summary.FileWriter('../tensorboard/ppo/{}'.format(
             time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
             ), self.session.graph)
         self.session.run(tf.global_variables_initializer())
@@ -107,12 +98,14 @@ class PPO(object):
 
         self.lr_ph = tf.placeholder(tf.float32, name='lr_ph')
 
-        self.beta_ph = tf.placeholder(tf.float32, name='beta_ph')
+        self.epsilon_ph = tf.placeholder(tf.float32, name='epsilon_ph')
 
         self.old_log_vars_ph = tf.placeholder(tf.float32, [self.act_dim, ],
                                               'old_log_vars')
         self.old_means_ph = tf.placeholder(tf.float32, [None, self.act_dim],
                                            'old_means')
+
+        self.old_vf_loss_ph = tf.placeholder(tf.float32, name='old_vf_loss_ph')
 
     def _build_network(self):
         # build actor network
@@ -162,51 +155,65 @@ class PPO(object):
 
         return [self.actor_network, self.critic_network]
 
-    def _build_trainning(self):
+    def _build_training(self):
         # logprob
-        self.logp = -0.5 * tf.reduce_sum(self.log_vars) + -0.5 * tf.reduce_sum(tf.square(self.act_ph - self.means) / tf.exp(self.log_vars), axis=1)
-        self.logp_old = -0.5 * tf.reduce_sum(self.old_log_vars_ph) + -0.5 * tf.reduce_sum(tf.square(self.act_ph - self.old_means_ph) / tf.exp(self.old_log_vars_ph), axis=1)
+        self.logp = -0.5*tf.reduce_sum(self.log_vars) + -0.5*tf.reduce_sum(tf.square(self.act_ph-self.means) /
+                           tf.exp(self.log_vars), axis=1)
+        self.logp_old = -0.5*tf.reduce_sum(self.old_log_vars_ph) + -0.5*tf.reduce_sum(tf.square(self.act_ph-self.old_means_ph) /
+                           tf.exp(self.old_log_vars_ph), axis=1)
 
         with tf.variable_scope('kl'):
-            self.kl = 0.5 * tf.reduce_mean(tf.reduce_sum(tf.exp(self.old_log_vars_ph - self.log_vars)) + 
-                tf.reduce_sum(tf.square(self.means - self.old_means_ph) / tf.exp(self.log_vars), axis=1) -
-                self.act_dim +
-                tf.reduce_sum(self.log_vars) - tf.reduce_sum(self.old_log_vars_ph))
+            self.kl = 0.5*tf.reduce_mean(tf.reduce_sum(tf.exp(self.old_log_vars_ph-self.log_vars)) + 
+                                         tf.reduce_sum(tf.square(self.means-self.old_means_ph)/tf.exp(self.log_vars), axis=1) -
+                                         self.act_dim +
+                                         tf.reduce_sum(self.log_vars) - tf.reduce_sum(self.old_log_vars_ph))
 
         with tf.variable_scope('entropy'):
-            self.entropy = 0.5 * (self.act_dim * (np.log(2 * np.pi) + 1) +
-                                  tf.reduce_sum(self.log_vars))
+            self.entropy = 0.5*(self.act_dim*(np.log(2*np.pi)+1) +
+                                tf.reduce_sum(self.log_vars))
 
-        with tf.variable_scope('actor_loss'):
-            loss1 = -tf.reduce_mean(self.adv_ph * tf.exp(self.logp - self.logp_old))
-            loss2 = tf.reduce_mean(self.beta_ph * self.kl)
-            loss3 = self.args.eta * tf.square(tf.maximum(0.0, self.kl - 2.0 * self.args.kl_targ))
-            self.actor_loss = loss1 + loss2 + loss3
+        with tf.variable_scope('surogate_loss'):
+            ratio = tf.exp(self.logp-self.logp_old)
+            surr1 = ratio*self.adv_ph
+            surr2 = tf.clip_by_value(ratio, 1.-self.epsilon_ph, 1.+self.epsilon_ph) * self.adv_ph
+            self.surr_loss = -tf.reduce_mean(tf.minimum(surr1, surr2))
 
-        self.actor_opt = tf.train.AdamOptimizer(self.lr_ph).minimize(self.actor_loss)
+        with tf.variable_scope('value_loss'):
+            vf_loss1 = tf.square(self.value - self.ret_ph)
+            vf_clipped = self.old_vf_loss_ph + tf.clip_by_value(
+                self.value - self.old_vf_loss_ph, -self.epsilon_ph, self.epsilon_ph)
+            vf_loss2 = tf.square(vf_clipped - self.ret_ph)
+            self.value_loss = tf.reduce_mean(tf.minimum(vf_loss1, vf_loss2))
+            self.old_value_loss = tf.reduce_mean(vf_loss1)
 
-        with tf.variable_scope('critic_loss'):
-            self.critic_loss = tf.reduce_mean(tf.square(tf.squeeze(self.value) - self.ret_ph))
-        self.critic_opt = tf.train.AdamOptimizer(self.args.critic_lr).minimize(self.critic_loss)
+        with tf.variable_scope('total_loss'):
+            self.total_loss = self.surr_loss + 1.0 * self.value_loss + 0.0 * self.entropy
 
+        # vf_grad = tf.gradients(self.value_loss, self.critic_network.all_params)
+
+        self.actor_opt = tf.train.AdamOptimizer(self.lr_ph).minimize(self.total_loss)
+        self.critic_opt = tf.train.AdamOptimizer(1e-3).minimize(self.value_loss)
+               
     def _build_summary(self):
         self.score_tb = tf.placeholder(tf.float32, name='score_tb')
-        self.actor_loss_tb = tf.placeholder(tf.float32, name='actor_loss_tb')
-        self.critic_loss_tb = tf.placeholder(tf.float32, name='critic_loss_tb')
-        self.entropy_tb = tf.placeholder(tf.float32, name='entropy_tb')
-        self.kl_tb = tf.placeholder(tf.float32, name='kl_tb')
         self.lr_tb = tf.placeholder(tf.float32, name='lr_tb')
-        self.beta_tb = tf.placeholder(tf.float32, name='beta_tb')
+        self.epsilon_tb = tf.placeholder(tf.float32, name='epsilon_tb')
+        self.kl_tb = tf.placeholder(tf.float32, name='kl_tb')
+        self.entropy_tb = tf.placeholder(tf.float32, name='entropy_tb')
+        self.surr_loss_tb = tf.placeholder(tf.float32, name='surr_loss_tb')
+        self.value_loss_tb = tf.placeholder(tf.float32, name='value_loss_tb')
+        self.total_loss_tb = tf.placeholder(tf.float32, name='total_loss_tb')
 
         with tf.name_scope('loss'):
-            tf.summary.scalar('actor_loss', self.actor_loss_tb)
-            tf.summary.scalar('critic_loss', self.critic_loss_tb)
+            tf.summary.scalar('surr_loss', self.surr_loss_tb)
+            tf.summary.scalar('value_loss', self.value_loss_tb)
+            tf.summary.scalar('total_loss', self.total_loss_tb)
 
         with tf.name_scope('param'):
             tf.summary.scalar('entropy', self.entropy_tb)
             tf.summary.scalar('kl', self.kl_tb)
             tf.summary.scalar('lr', self.lr_tb)
-            tf.summary.scalar('beta', self.beta_tb)
+            tf.summary.scalar('epsilon', self.epsilon_tb)
 
         tf.summary.scalar('score', self.score_tb)
 
@@ -216,30 +223,28 @@ class PPO(object):
         self.act_ph: acts,
         self.adv_ph: advs,
         self.ret_ph: rets,
-        self.beta_ph: self.beta,
-        self.lr_ph: self.args.actor_lr * self.lr_multiplier
+        self.lr_ph: self.args.lr * self.lr_multiplier,
+        self.epsilon_ph: self.args.epsilon * self.lr_multiplier
         }
 
-        old_means_np, old_log_vars_np = self.session.run([self.means, self.log_vars],
-                                                      feed_dict)
+        old_means_np, old_log_vars_np, old_vf_loss = self.session.run(
+            [self.means, self.log_vars, self.old_value_loss], feed_dict)
+
         feed_dict[self.old_log_vars_ph] = old_log_vars_np
         feed_dict[self.old_means_ph] = old_means_np
+        feed_dict[self.old_vf_loss_ph] = old_vf_loss
 
-        for e in range(self.args.train_epochs):
-            self.session.run(self.actor_opt, feed_dict)
-            kl = self.session.run(self.kl, feed_dict)
-            if kl > self.args.kl_targ * 4: # early stopping
-                break
+        if not self.args.test_algorithm:
+            for e in range(self.args.train_epochs):
+                self.session.run(self.actor_opt, feed_dict)
+                kl = self.session.run(self.kl, feed_dict)
+                if kl > self.args.kl_targ * 4:
+                    break
 
-        # magic setting
-        if kl > self.args.kl_targ * 2:
-            self.beta = np.minimum(35, 1.5 * self.beta)
-            if self.beta > 30 and self.lr_multiplier > 0.1:
-                self.lr_multiplier /= 1.5
-        elif kl < self.args.kl_targ / 2.0:
-            self.beta = np.maximum(1.0 / 35.0, self.beta / 1.5)
-            if self.beta < (1.0 / 30.0) and self.lr_multiplier < 10:
-                self.lr_multiplier *= 1.5
+        if kl > self.args.kl_targ * 2.:
+            self.lr_multiplier /= 1.5
+        elif kl < self.args.kl_targ / 2.:
+            self.lr_multiplier *= 1.5
 
         stats = self._visualize_stats(feed_dict, score)
         self._visualize_tensorboard(stats)
@@ -248,6 +253,39 @@ class PPO(object):
             self.save_network(self.args.model_name)
 
         return stats
+
+    def _visualize_stats(self, feed_dict, score):
+        kl, entropy, surr_loss, value_loss, total_loss = self.session.run(
+            [self.kl, self.entropy, self.surr_loss, self.value_loss, self.total_loss], 
+             feed_dict)
+
+        stats = OrderedDict()
+        stats["Score"] = score
+        stats["LearningRate"] = self.args.lr * self.lr_multiplier
+        stats["ClipedParameter"] = self.args.epsilon * self.lr_multiplier
+        stats["KL-divergence"] = kl
+        stats["Entropy"] = entropy
+        stats["SurrogateLoss"] = surr_loss
+        stats["ValueLoss"] = value_loss
+        stats["Loss"] = total_loss
+
+        return stats
+
+    def _visualize_tensorboard(self, stats):
+        feed_dict = {
+        self.score_tb: stats["Score"],
+        self.lr_tb: stats["LearningRate"],
+        self.epsilon_tb: stats["ClipedParameter"],
+        self.kl_tb: stats["KL-divergence"],
+        self.entropy_tb: stats["Entropy"],
+        self.surr_loss_tb: stats["SurrogateLoss"],
+        self.value_loss_tb: stats["ValueLoss"],
+        self.total_loss_tb: stats["Loss"]
+        }
+
+        self.time_step += 1
+        summary = self.session.run(self.merge_all, feed_dict)
+        self.writer.add_summary(summary, self.time_step)
 
     def update_critic(self, x, y):
         num_batches = max(x.shape[0] // 256, 1)
@@ -270,39 +308,19 @@ class PPO(object):
                              self.ret_ph: ret}
                 self.session.run(self.critic_opt, feed_dict=feed_dict)
 
-    def _visualize_stats(self, feed_dict, score):
-        kl, entropy, actor_loss, critic_loss = self.session.run(
-            [self.kl, self.entropy, self.actor_loss, self.critic_loss],
-            feed_dict)
+    def save_network(self, model_name):
+        for i in range(len(self.model)):
+            tl.files.save_npz(self.model[i].all_params,
+                              name='../model/ppo/{}_{}.npz'.format(model_name, i),
+                              sess=self.session)
 
-        stats = OrderedDict()
-        stats["Score"] = score
-        stats["LearningRate"] = self.args.actor_lr * self.lr_multiplier
-        stats["Beta"] = self.beta
-        stats["KL-divergence"] = kl
-        stats["Entropy"] = entropy
-        stats["ActorLoss"] = actor_loss
-        stats["CriticLoss"] = critic_loss
-
-        return stats
-
-    def _visualize_tensorboard(self, stats):
-        feed_dict = {
-        self.score_tb: stats["Score"],
-        self.lr_tb: stats["LearningRate"],
-        self.beta_tb: stats["Beta"],
-        self.kl_tb: stats["KL-divergence"],
-        self.entropy_tb: stats["Entropy"],
-        self.actor_loss_tb: stats["ActorLoss"],
-        self.critic_loss_tb: stats["CriticLoss"],
-        }
-
-        self.time_step += 1
-        summary = self.session.run(self.merge_all, feed_dict)
-        self.writer.add_summary(summary, self.time_step)
+    def load_network(self, model_name):
+        for i in range(len(self.model)):
+            params = tl.files.load_npz(name='../model/ppo/{}_{}.npz'.format(model_name, i))
+            tl.files.assign_params(self.session, params, self.model[i])
 
     def sample(self, obs):
-        # obs = np.reshape(obs, (1, self.obs_dim))
+        obs = np.reshape(obs, (1, self.obs_dim))
         feed_dict = {self.obs_ph: obs}
         if self.args.test_algorithm:
             return self.session.run(self.means, feed_dict=feed_dict)
@@ -310,11 +328,10 @@ class PPO(object):
             return self.session.run(self.sampled_act, feed_dict=feed_dict)
 
     def get_value(self, obs):
-        values = self.value.eval(feed_dict = {self.obs_ph: obs})
-        return values
+        return self.value.eval(feed_dict={self.obs_ph: obs})
 
     def convert_action(self, action):
-        return action * self.act_high
+        return action*self.act_high
 
     def init_param(self, env, args):
         self.args = args
@@ -326,114 +343,42 @@ class PPO(object):
         # value init
         self.time_step = 0
         self.score = 0
-
-        # actor param
-        self.beta = 1
-        self.lr_multiplier = 1.0
-
-        # critic param
+        self.lr_multiplier = 1.
+        self.critic_epochs = 10
         self.replay_buffer_x = None
         self.replay_buffer_y = None
-        self.critic_epochs = 10
 
-    def save_network(self, model_name):
-        for i in range(len(self.model)):
-            tl.files.save_npz(self.model[i].all_params,
-                              name='./model/ppo/{}_{}.npz'.format(model_name, i),
-                              sess=self.session)
+def run_episode(env, agent, animate=args.animate):
+    state = env.reset()
+    obs, acts, rewards = [], [], []
+    done = False
+    while not done:
+        if animate:
+            env.render()
+        obs.append(state)
+        action = agent.sample(state).reshape((1, -1)).astype(np.float32)
+        acts.append(action)
+        state, reward, done, _ = env.step(np.squeeze(action, axis=0))
+        rewards.append(reward)
 
-    def load_network(self, model_name):
-        for i in range(len(self.model)):
-            params = tl.files.load_npz(name='./model/ppo/{}_{}.npz'.format(model_name, i))
-            tl.files.assign_params(self.session, params, self.model[i])
+    return (np.asarray(obs), np.asarray(acts), np.asarray(rewards))
 
-
-@ray.remote
-class RayEnvironment(object):
-    def __init__(self, env):
-        self.env = env
-        state = self.env.reset()
-        self.shape = state.shape
-
-    def step(self, action):
-        if self.done:
-            return [np.zeros(self.shape), 0.0, True]
-        else:
-            state, reward, done, info = self.env.step(action)
-            self.done = done
-            return [state, reward, done]
-
-    def reset(self):
-        self.done = False
-        return self.env.reset()
-
-def run_episode(envs, agent, trajectories, animate=args.animate):
-    terminates = [False for _ in range(len(envs))]
-    terminates_idxs = [0 for _ in range(len(envs))]
-
-    paths_obs, paths_act, paths_rew = [], [], []
-
-    states = [env.reset.remote() for env in envs]
-    states = ray.get(states)
-
-    while not all(terminates):
-        # if animate:
-        #     env.render()
-        paths_obs.append(states)
-        actions = agent.sample(states)
-        paths_act.append(actions)
-        next_step = [env.step.remote(actions[i]) for i, env in enumerate(envs)]
-        next_step = ray.get(next_step)
-
-        states = [batch[0] for batch in next_step]
-        rewards = [batch[1] for batch in next_step]
-        dones = [batch[2] for batch in next_step]
-
-        paths_rew.append(rewards)
-
-        for i, d in enumerate(dones):
-            if d:
-                terminates[i] = True
-            else:
-                terminates_idxs[i] += 1
-
-    for i in range(len(envs)):
-        obs = []
-        acts = []
-        rews = []
-
-        for j in range(len(paths_rew)):
-            obs.append(paths_obs[j][i])
-            acts.append(paths_act[j][i])
-            rews.append(paths_rew[j][i])
-            if terminates_idxs[i] == j:
-                break
-
-        obs = np.asarray(obs)
-        acts = np.asarray(acts)
-        rews = np.asarray(rews)
-
-        acts = np.reshape(acts, (len(rews), agent.act_dim))
+def run_policy(env, agent, training_steps, batch_size):
+    trajectories = []
+    total_step = 0
+    for e in range(batch_size):
+        obs, acts, rewards = run_episode(env, agent)
+        acts = np.reshape(acts, (len(rewards), agent.act_dim))
+        total_step += len(rewards)
         trajectory = {
         'obs': obs,
         'acts': acts,
-        'rewards': rews
+        'rewards': rewards
         }
-
         trajectories.append(trajectory)
 
-
-    return trajectories
-
-def run_policy(envs, agent, training_steps, batch_size):
-    trajectories = []
-
-    for e in range((batch_size // args.nums_worker) + 1):
-        trajectories = run_episode(envs, agent, trajectories)
-
-    mean_step = np.mean([len(t['rewards']) for t in trajectories])
     score = np.mean([t['rewards'].sum() for t in trajectories])
-    return trajectories, score, mean_step
+    return trajectories, score, total_step
 
 def discount(x, gamma):
     return scipy.signal.lfilter([1.0], [1.0, -gamma], x[::-1])[::-1]
@@ -485,13 +430,10 @@ def train():
         env = wrappers.Monitor(env, './model/{}'.format(args.model_name), force=True)
     e = 0
 
-    envs = [gym.make(args.env_name) for _ in range(args.nums_worker)]
-    envs = [RayEnvironment.remote(envs[i]) for i in range(args.nums_worker)]
-
     if args.load_network:
         agent.load_network(args.model_name)
     while e < (args.max_episodes):
-        trajectories, score, mean_step = run_policy(envs, agent, args.training_steps, args.batch_size)
+        trajectories, score, total_step = run_policy(env, agent, args.training_steps, args.batch_size)
         e += len(trajectories)
         add_value(trajectories, agent)
         add_disc_sum_rew(trajectories, args.gamma)
@@ -499,36 +441,10 @@ def train():
         obs, acts, advs, rets = build_train_set(trajectories)
 
         stats = agent.update_actor(obs, acts, advs, rets, score)
-        agent.update_critic(obs, rets)
-        stats["AverageStep"] = mean_step
+        # agent.update_critic(obs, rets)
+        stats["AverageStep"] = total_step / args.batch_size
         stats["Iteration"] = e
         print_stats(stats)
 
-def apply_wechat():
-    threads = []
-    t1 = threading.Thread(target=train)
-    threads.append(t1)
-    t2 = threading.Thread(target=util.wechat_display)
-    threads.append(t2)
-
-    for t in threads:
-        t.start()
-
 if __name__ == "__main__":
-    ray.init()
     train()
-    # apply_wechat()
-    # util.wechat_display()
-    
-
-
-
-
-
-
-
-
-
-
-
-
