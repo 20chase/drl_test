@@ -1,19 +1,8 @@
-"""
-Prioritized Replay Buffer Implemented by OpenAI Baselines 
-@misc{baselines,
-  author = {Hesse, Christopher and Plappert, Matthias and Radford, Alec and Schulman, John and Sidor, Szymon and Wu, Yuhuai},
-  title = {OpenAI Baselines},
-  year = {2017},
-  publisher = {GitHub},
-  journal = {GitHub repository},
-  howpublished = {\url{https://github.com/openai/baselines}},
-}
-
-"""
 import random
 import operator
 
 import numpy as np
+import tensorflow as tf
 
 
 class SegmentTree(object):
@@ -345,3 +334,12 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             self._it_min[idx] = priority ** self._alpha
 
             self._max_priority = max(self._max_priority, priority)
+
+
+def huber_loss(x, delta=1.0):
+    """Reference: https://en.wikipedia.org/wiki/Huber_loss"""
+    return tf.where(
+        tf.abs(x) < delta,
+        tf.square(x) * 0.5,
+        delta * (tf.abs(x) - 0.5 * delta)
+    )
