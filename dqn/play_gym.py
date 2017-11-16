@@ -6,6 +6,7 @@ import numpy as np
 import tensorflow as tf
 
 from pddqn import PrioritizedDoubleDQN
+from ddqn import DDQN
 
 parser = argparse.ArgumentParser(description='prioritized dueling double deep q-network algorithm')
 
@@ -25,13 +26,13 @@ parser.add_argument(
     '--gamma', default=.99, type=float, help='gamma')
 
 parser.add_argument(
-    '--batch_size', default=16, type=int, help='training batch size')
+    '--batch_size', default=32, type=int, help='training batch size')
 
 parser.add_argument(
     '--update_target_num', default=500, type=int, help='the frequence of updating target network')
 
 parser.add_argument(
-    '--obs_num', default=20000, type=int, help='how many transitions before agent training')
+    '--obs_num', default=1000, type=int, help='how many transitions before agent training')
 
 parser.add_argument(
     '--explore_num', default=10000, type=int, help='how many transitions finished the exploration')
@@ -46,10 +47,10 @@ parser.add_argument(
     '--animate', default=False, type=bool, help='whether to animate environment')
 
 parser.add_argument(
-    '--prioritized', default=False, type=bool, help='whether to use prioritized replay buffer')
+    '--prioritized', default=True, type=bool, help='whether to use prioritized replay buffer')
 
 parser.add_argument(
-    '--huber', default=False, type=bool, help='whether to use huber loss')
+    '--huber', default=True, type=bool, help='whether to use huber loss')
 
 parser.add_argument(
     '--save_network', default=False, type=bool, help='whether to save network')
@@ -79,6 +80,7 @@ class PlayGym(object):
         for e in range(times):
             score = self._train_episode()
             self.agent.get_score(score)
+            # self.agent.update_target()
             # print ("Episode: {} | score: {} | epsilon: {}".format(e+1, score, self.agent.epsilon))
             if e % 50 == 0:
                 scores = [self._test_episode() for _ in range(10)]
@@ -107,9 +109,9 @@ class PlayGym(object):
         while not done:
             act = self.agent.action(obs)
             new_obs, rew, done, info = self.env.step(act)
-            self.agent.buffer.add(obs, self.agent.one_hot_key(act), rew, new_obs, float(done))
+            self.agent.buffer.add(obs, self.agent.one_hot_key(act), rew, new_obs, done)
             score += rew    
-            new_obs = obs
+            obs = new_obs
             if len(self.agent.buffer) > self.args.obs_num:
                 self.agent.train()
 
@@ -124,6 +126,7 @@ if __name__ == '__main__':
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.n
     agent = PrioritizedDoubleDQN(session, args, obs_dim, act_dim)
+    # agent = DDQN(session, args, obs_dim, act_dim)
     player = PlayGym(args, env, agent)
 
     session.run(tf.global_variables_initializer())

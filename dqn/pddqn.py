@@ -49,11 +49,11 @@ class PrioritizedDoubleDQN(object):
         hid2_size = int(np.sqrt(hid1_size*hid3_size))
 
         network = tl.layers.InputLayer(self.obs_ph, name='input_{}'.format(model_name))
-        network = tl.layers.DenseLayer(network, n_units=64, act=tf.nn.relu, 
+        network = tl.layers.DenseLayer(network, n_units=hid1_size, act=tf.nn.relu, 
             name='relu1_{}'.format(model_name))
-        network = tl.layers.DenseLayer(network, n_units=32, act=tf.nn.relu, 
+        network = tl.layers.DenseLayer(network, n_units=hid2_size, act=tf.nn.relu, 
             name='relu2_{}'.format(model_name))
-        network = tl.layers.DenseLayer(network, n_units=16, act=tf.nn.relu, 
+        network = tl.layers.DenseLayer(network, n_units=hid3_size, act=tf.nn.relu, 
             name='relu3_{}'.format(model_name))
         network = tl.layers.DenseLayer(network, n_units=self.act_dim, name='output_{}'.format(model_name))
 
