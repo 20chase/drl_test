@@ -124,7 +124,7 @@ class PrioritizedDoubleDQN(object):
 
         rets = []
         for i in range(len(rews)):
-            if dones[i] == 1.0:
+            if dones[i]:
                 rets.append(rews[i])
             else:
                 rets.append(rews[i]+self.args.gamma*q_target[i][np.argmax(q_eval[i])])

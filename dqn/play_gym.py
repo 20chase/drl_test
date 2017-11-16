@@ -6,6 +6,7 @@ import numpy as np
 import tensorflow as tf
 
 from pddqn import PrioritizedDoubleDQN
+from pdd_dqn import PrioritizedDoubleDuelingDQN
 from ddqn import DDQN
 
 parser = argparse.ArgumentParser(description='prioritized dueling double deep q-network algorithm')
@@ -32,10 +33,10 @@ parser.add_argument(
     '--update_target_num', default=500, type=int, help='the frequence of updating target network')
 
 parser.add_argument(
-    '--obs_num', default=1000, type=int, help='how many transitions before agent training')
+    '--obs_num', default=2000, type=int, help='how many transitions before agent training')
 
 parser.add_argument(
-    '--explore_num', default=10000, type=int, help='how many transitions finished the exploration')
+    '--explore_num', default=50000, type=int, help='how many transitions finished the exploration')
 
 parser.add_argument(
     '--buffer_size', default=100000, type=int, help='the size of replay buffer')
@@ -125,7 +126,8 @@ if __name__ == '__main__':
     env = gym.make(args.gym_id)
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.n
-    agent = PrioritizedDoubleDQN(session, args, obs_dim, act_dim)
+    agent = PrioritizedDoubleDuelingDQN(session, args, obs_dim, act_dim)
+    # agent = PrioritizedDoubleDQN(session, args, obs_dim, act_dim)
     # agent = DDQN(session, args, obs_dim, act_dim)
     player = PlayGym(args, env, agent)
 
