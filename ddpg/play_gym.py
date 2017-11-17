@@ -32,7 +32,7 @@ parser.add_argument(
     '--update_target_num', default=500, type=int, help='the frequence of updating target network')
 
 parser.add_argument(
-    '--obs_num', default=2000, type=int, help='how many transitions before agent training')
+    '--obs_num', default=1000, type=int, help='how many transitions before agent training')
 
 parser.add_argument(
     '--buffer_size', default=100000, type=int, help='the size of replay buffer')

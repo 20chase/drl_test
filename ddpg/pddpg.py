@@ -96,11 +96,8 @@ class PrioritizedDDPG(object):
             critic_loss = tf.reduce_mean(self.weights_ph*errors)
 
         critic_opt = tf.train.AdamOptimizer(self.args.critic_lr).minimize(critic_loss)
-
         actor_net = self.eval_model[0]
-        
         grads = tf.gradients(self.act_eval, actor_net.all_params, -self.q_grads_ph)
-
         actor_opt = tf.train.AdamOptimizer(self.args.actor_lr).apply_gradients(zip(grads, actor_net.all_params))
 
         # update target network

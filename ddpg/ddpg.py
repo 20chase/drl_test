@@ -1,12 +1,12 @@
-import tensorflow as tf
-import tensorlayer as tl
 import gym
 import time
-import filter_env
+import random
+import roboschool
 
 import numpy as np
-import random
-import os
+import tensorflow as tf
+import tensorlayer as tl
+
 from gym import wrappers
 from collections import deque
 
@@ -23,21 +23,13 @@ REPLAY_SIZE = 100000
 BATCH_SIZE = 32
 TEST = 100
 
-# ENV_NAME = 'InvertedPendulum-v1'
-ENV_NAME = 'InvertedDoublePendulum-v1'
+ENV_NAME = 'RoboschoolInvertedPendulum-v1'
+# ENV_NAME = 'InvertedDoublePendulum-v1'
 # ENV_NAME = 'LunarLanderContinuous-v2'
 
 
-def tic():
-	globals()['tt'] = time.clock()
- 
-def toc():
-	print '\nElapsed time: %.8f seconds\n' % (time.clock()-globals()['tt'])
-
-class DDPG():
-
+class DDPG(object):
 	def __init__(self, env):
-
 		self.init_param(env)
 
 		self.build_Qvalue_network()

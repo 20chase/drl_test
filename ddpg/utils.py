@@ -1,5 +1,6 @@
 import random
 import operator
+import time
 
 import numpy as np
 import tensorflow as tf
@@ -362,3 +363,9 @@ def huber_loss(x, delta=1.0):
         tf.square(x) * 0.5,
         delta * (tf.abs(x) - 0.5 * delta)
     )
+
+# def tic():
+#     globals()['tt'] = time.clock()
+ 
+# def toc():
+#     print '\nElapsed time: %.8f seconds\n' % (time.clock()-globals()['tt'])
