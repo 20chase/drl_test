@@ -18,11 +18,11 @@ class DiscreteA2C(object):
 
         self.time_step = 0
         self.score = 0
-        self.lr_scheduler = U.scheduler(v=self.args.lr,
+        self.lr_scheduler = U.Scheduler(v=self.args.lr,
             nvalues=self.args.max_steps, schedule='linear')
 
         self._build_ph()
-        self.model, self.value, self.act_value, self.act = self._build_net()
+        self.model, self.value, self.act_value, self.sample = self._build_net()
         self.costs, self.opt = self._build_training_method()
         self._build_tensorboard()
 
@@ -33,7 +33,7 @@ class DiscreteA2C(object):
 
     def _build_ph(self):
         self.obs_ph = tf.placeholder(tf.float32, [None, self.obs_dim], 'obs_ph')
-        self.act_ph = tf.placeholder(tf.float32, [None, self.act_dim], 'act_ph')
+        self.act_ph = tf.placeholder(tf.int32, [None, ], 'act_ph')
         self.adv_ph = tf.placeholder(tf.float32, [None, ], 'adv_ph')
         self.ret_ph = tf.placeholder(tf.float32, [None, ], 'ret_ph')
         self.lr_ph = tf.placeholder(tf.float32, name='lr_ph')
@@ -54,10 +54,14 @@ class DiscreteA2C(object):
 
         value = value_net.outputs[:, 0]
         act_value = act_net.outputs
-        with tf.variable_scope('sample_act'):
-            act = U.sample(act_value)
+        if self.args.softmax:
+            with tf.variable_scope('sample_softmax'):
+                sample = U.sample_softmax(act_value)
+        else:
+            with tf.variable_scope('sample'):
+                sample = U.sample(act_value)
 
-        return [main_net, act_net, value_net], value, act_value, act
+        return [main_net, act_net, value_net], value, act_value, sample
 
     def _build_training_method(self):
         with tf.variable_scope('td_error'):
@@ -72,7 +76,7 @@ class DiscreteA2C(object):
             critic_loss = tf.reduce_mean(errors)
 
         with tf.variable_scope('act_prob'):
-            act_prob = tf.nn.softmax_cross_entropy_with_logits(logits=self.act_value, labels=self.act_ph)
+            act_prob = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.act_value, labels=self.act_ph)
         with tf.variable_scope('actor_loss'):
             actor_loss = tf.reduce_mean(self.adv_ph * act_prob)
 
@@ -80,7 +84,7 @@ class DiscreteA2C(object):
             entropy = tf.reduce_mean(U.cat_entropy(self.act_value))
 
         with tf.variable_scope('total_loss'):
-            loss = actor_loss + 0.5 * critic_loss - 0.0 * entropy
+            loss = actor_loss + self.args.vf_coef * critic_loss - self.args.ent_coef * entropy
 
         params = U.get_all_params(self.model)
         grads = tf.gradients(loss, params)
@@ -91,7 +95,7 @@ class DiscreteA2C(object):
         trainer = tf.train.RMSPropOptimizer(learning_rate=self.lr_ph, decay=0.99, epsilon=1e-5)
         opt = trainer.apply_gradients(grads)
 
-        return [actor_loss, critic_loss, entropy, total_loss], opt
+        return [actor_loss, critic_loss, entropy, loss], opt
 
     def _build_tensorboard(self):
         self.score_tb = tf.placeholder(tf.float32, name='score_tb')
@@ -106,6 +110,7 @@ class DiscreteA2C(object):
         with tf.name_scope('params'):
             tf.summary.scalar('score', self.score_tb)
             tf.summary.scalar('value', mean_v)
+            tf.summary.scalar('lr', self.lr_ph)
 
         for i in range(len(self.model)):
             for param in self.model[i].all_params:
@@ -132,15 +137,30 @@ class DiscreteA2C(object):
             [self.merge_all, self.costs[0], self.costs[1], self.costs[2], self.costs[3], self.opt],
             feed_dict=feed_dict)
 
-        self.writer.add_summary(summary self.time_step)
+        self.writer.add_summary(summary, self.time_step)
 
     def step(self, obs):
         feed_dict = {self.obs_ph: obs}
-        act, value = self.sess.run([self.act, self.value], feed_dict=feed_dict)
+        if self.args.softmax:
+            prob, value = self.sess.run([self.sample, self.value],feed_dict=feed_dict)
+            act = self.sample_act(prob)
+        else:
+            act, value = self.sess.run([self.sample, self.value], feed_dict=feed_dict)
         return act, value
+
+    def get_action(self, obs):
+        act = self.sess.run(self.sample, feed_dict={self.obs_ph: obs})
+        if self.args.softmax:
+            act = self.sample_act(act)
+        return act
 
     def get_value(self, obs):
         return self.sess.run(self.value, feed_dict={self.obs_ph: obs})
+
+    def sample_act(self, prob):
+        acts = [np.random.choice(range(self.act_dim), p=p) for p in prob]
+        acts = np.asarray(acts, dtype=np.int32)  
+        return np.squeeze(acts)
 
     def save_network(self, model_name):
         for i, network in enumerate(self.model):

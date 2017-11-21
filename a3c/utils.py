@@ -6,6 +6,14 @@ import tensorlayer as tl
 
 from multiprocessing import Process, Pipe
 
+def discount_with_dones(rewards, dones, gamma):
+    discounted = []
+    r = 0
+    for reward, done in zip(rewards[::-1], dones[::-1]):
+        r = reward + gamma*r*(1.-done) # fixed off by one bug
+        discounted.append(r)
+    return discounted[::-1]
+
 def set_global_seeds(i):
     tf.set_random_seed(i)
     np.random.seed(i)
@@ -14,6 +22,9 @@ def set_global_seeds(i):
 def sample(logits):
     noise = tf.random_uniform(tf.shape(logits))
     return tf.argmax(logits - tf.log(-tf.log(noise)), 1)
+
+def sample_softmax(logits):
+    return tf.nn.softmax(logits)
 
 def huber_loss(x, delta=1.0):
     """Reference: https://en.wikipedia.org/wiki/Huber_loss"""
@@ -36,6 +47,12 @@ def get_all_params(model):
         params += net.all_params
 
     return params
+
+def constant(p):
+    return 1
+
+def linear(p):
+    return 1-p
 
 schedules = {
     'linear':linear,

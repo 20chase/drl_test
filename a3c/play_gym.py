@@ -17,6 +17,12 @@ parser.add_argument(
     '--lr', default=7e-4, type=float, help='learning rate')
 
 parser.add_argument(
+    '--ent_coef', default=0., type=float, help='the coefficient of entropy')
+
+parser.add_argument(
+    '--vf_coef', default=0.5, type=float, help='the coefficient of value function')
+
+parser.add_argument(
     '--max_grad_norm', default=0.5, type=float, help='max gradients normalize')
 
 parser.add_argument(
@@ -29,16 +35,19 @@ parser.add_argument(
     '--num_steps', default=5, type=int, help='the number of steps')
 
 parser.add_argument(
-    '--num_procs', default=16, type=int, help='the number of processes')
+    '--num_procs', default=32, type=int, help='the number of processes')
 
 parser.add_argument(
-    '--max_steps', default=80e6, type=int, help='max steps of training')
+    '--max_steps', default=8e6, type=int, help='max steps of training')
 
 parser.add_argument(
     '--animate', default=False, type=bool, help='whether to animate environment')
 
 parser.add_argument(
-    '--huber', default=True, type=bool, help='whether to use huber loss')
+    '--softmax', default=True, type=bool, help='whether to use softmax to sample action')
+
+parser.add_argument(
+    '--huber', default=False, type=bool, help='whether to use huber loss')
 
 parser.add_argument(
     '--save_network', default=False, type=bool, help='whether to save network')
@@ -66,7 +75,7 @@ def build_multi_envs():
         return _thunk
 
     U.set_global_seeds(args.seed)
-    env = U.SubproVecEnv([make_env(i) for i in range(args.num_procs)])
+    env = U.SubprocVecEnv([make_env(i) for i in range(args.num_procs)])
     return env
 
 class PlayGym(object):
@@ -74,14 +83,32 @@ class PlayGym(object):
         self.args = args
         self.env = env
         self.agent = agent
+        self.test_env = gym.make(self.args.gym_id)
 
-    def play(self):
-        pass
-        
-
-    def sample_trajs(self):
-        obses, acts, rews, values, dones = [], [], [], [], []
+    def play(self, max_iters=100000):
         obs = self.env.reset()
+        for i in range(max_iters):
+            obses, acts, rews, values, obs = self._sample_trajs(obs)
+            self.agent.update(obses, acts, rews, values)
+            if i % 100 == 0:
+                score = self.test()
+                print ("iter: {} | score: {}".format(i, score))
+                self.agent.score = score
+
+    def test(self):
+        env = self.test_env
+        obs = env.reset()
+        score = 0
+        done = False
+        while not done:
+            act = self.agent.get_action([obs])
+            obs, rew, done, _ = env.step(act)
+            score += rew
+        return score
+
+    def _sample_trajs(self, obs):
+        obses, acts, rews, values, dones = [], [], [], [], []
+        
         for step in range(self.args.num_steps):
             obses.append(obs)
             act, value = self.agent.step(obs)
@@ -91,7 +118,28 @@ class PlayGym(object):
             values.append(value)
             dones.append(done)
 
+        obses = np.asarray(obses, dtype=np.float32).swapaxes(1, 0)
+        acts = np.asarray(acts, dtype=np.int32).swapaxes(1, 0)
+        rews = np.asarray(rews, dtype=np.float32).swapaxes(1, 0)
+        values = np.asarray(values, dtype=np.float32).swapaxes(1, 0)
+        dones = np.asarray(dones, dtype=np.bool).swapaxes(1, 0)
+        last_values = self.agent.get_value(obs)
 
+        for n, (rew, done, value) in enumerate(zip(rews, dones, last_values)):
+            rew = rew.tolist()
+            done = done.tolist()
+            if done[-1] == 0:
+                rew = U.discount_with_dones(rew+[value], done+[0.], self.args.gamma)[:-1]
+            else:
+                rew = U.discount_with_dones(rew, done, self.args.gamma)
+            rews[n] = rew
+
+        obses = np.concatenate([obs for obs in obses])
+        acts = acts.flatten()
+        rews = rews.flatten()
+        values = values.flatten()
+
+        return obses, acts, rews, values, obs 
 
 if __name__ == '__main__':
     graph = tf.get_default_graph()
