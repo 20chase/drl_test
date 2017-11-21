@@ -26,7 +26,7 @@ parser.add_argument(
     '--gamma', default=.99, type=float, help='gamma')
 
 parser.add_argument(
-    '--batch_size', default=64, type=int, help='training batch size')
+    '--batch_size', default=128, type=int, help='training batch size')
 
 parser.add_argument(
     '--update_target_num', default=500, type=int, help='the frequence of updating target network')
