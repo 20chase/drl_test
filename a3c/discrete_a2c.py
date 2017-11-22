@@ -5,9 +5,6 @@ import tensorflow as tf
 import tensorlayer as tl
 import utils as U
 
-from collections import OrderedDict
-from sklearn.utils import shuffle
-
 
 class DiscreteA2C(object):
     def __init__(self, sess, args, obs_dim, act_dim):
