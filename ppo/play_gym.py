@@ -48,13 +48,13 @@ parser.add_argument(
     '--num_procs', default=32, type=int, help='the number of processes')
 
 parser.add_argument(
-    '--max_steps', default=1e6, type=int, help='max steps of training')
+    '--max_steps', default=10e6, type=int, help='max steps of training')
 
 parser.add_argument(
     '--animate', default=False, type=bool, help='whether to animate environment')
 
 parser.add_argument(
-    '--save_network', default=True, type=bool, help='whether to save network')
+    '--save_network', default=False, type=bool, help='whether to save network')
 
 parser.add_argument(
     '--load_network', default=False, type=bool, help='whether to load network')
@@ -73,6 +73,7 @@ args = parser.parse_args()
 
 def make_env():
     env = gym.make(args.gym_id)
+    env = U.Monitor(env, '../ppo/{}'.format(args.model_name))
     return env
 
 class PlayGym(object):
@@ -81,12 +82,12 @@ class PlayGym(object):
         self.env = env
         self.agent = agent
 
-    def play(self, max_iters=10000):
+    def play(self, max_iters=10000000):
         obs, done = self._reset()
         for i in range(max_iters):
             traj, obs, done = self._sample_traj(obs, done)
             self.agent.learn(traj)
-            if i % 50 == 0:
+            if i % 500 == 0:
                 score = self.test()
                 print ("iter: {} | score: {}".format(i, score))
                 self.agent.score = score
@@ -118,6 +119,9 @@ class PlayGym(object):
             values.append(value)
             logps.append(logp)
 
+        obs = np.squeeze(obs)
+        done = np.squeeze(done)
+
         obses = np.asarray(obses, dtype=np.float32)
         acts = np.asarray(acts, dtype=np.float32)
         rews = np.asarray(rews, dtype=np.float32)
@@ -125,7 +129,7 @@ class PlayGym(object):
         logps = np.asarray(logps, dtype=np.float32)
         dones = np.asarray(dones, dtype=np.bool)
 
-        last_value = self.agent.get_value(obs)[0]
+        last_value = self.agent.get_value([obs])[0]
 
         rets = np.zeros_like(rews)
         advs = np.zeros_like(rews)

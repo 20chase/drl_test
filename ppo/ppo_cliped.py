@@ -76,27 +76,36 @@ class PPOCliped(object):
         vpred = self.value
         vpred_clip = self.old_vpred_ph + tf.clip_by_value(self.value-self.old_vpred_ph,
             -self.clip_range_ph, self.clip_range_ph)
-        vf_loss1 = tf.square(vpred-self.ret_ph)
-        vf_loss2 = tf.square(vpred_clip-self.ret_ph)
+        with tf.variable_scope('vf_loss1'):
+            vf_loss1 = tf.square(vpred-self.ret_ph)
+        with tf.variable_scope('vf_loss2'):
+            vf_loss2 = tf.square(vpred_clip-self.ret_ph)
         with tf.variable_scope('vf_loss'):
             vf_loss = .5 * tf.reduce_mean(tf.maximum(vf_loss1, vf_loss2))
 
         logp = self.pd.neglogp(self.act_ph)
-        ratio = tf.exp(self.old_logp_ph-logp)
-        pg_loss1 = -self.adv_ph * ratio
-        pg_loss2 = -self.adv_ph * tf.clip_by_value(ratio, 1.0-self.clip_range_ph, 1.0+self.clip_range_ph)
+        with tf.variable_scope('ratio'):
+            ratio = tf.exp(self.old_logp_ph-logp)
+        with tf.variable_scope('pg_loss1'):
+            pg_loss1 = -self.adv_ph * ratio
+        with tf.variable_scope('pg_loss2'):
+            pg_loss2 = -self.adv_ph * tf.clip_by_value(ratio, 1.0-self.clip_range_ph, 1.0+self.clip_range_ph)
         with tf.variable_scope('pg_loss'):
             pg_loss = tf.reduce_mean(tf.maximum(pg_loss1, pg_loss2))
 
         with tf.variable_scope('entropy'):
             entropy = tf.reduce_mean(self.pd.entropy())
 
-        approx_kl = .5 * tf.reduce_mean(tf.square(logp-self.old_logp_ph))
-        clip_frac = tf.reduce_mean(tf.to_float(tf.greater(tf.abs(ratio-1.),self.clip_range_ph)))
+        with tf.variable_scope('approx_kl'):
+            approx_kl = .5 * tf.reduce_mean(tf.square(logp-self.old_logp_ph))
+        with tf.variable_scope('clip_frac'):
+            clip_frac = tf.reduce_mean(tf.to_float(tf.greater(tf.abs(ratio-1.),self.clip_range_ph)))
 
-        loss = pg_loss - self.args.ent_coef * entropy + self.args.vf_coef * vf_loss 
+        with tf.variable_scope('total_loss'):
+            loss = pg_loss - self.args.ent_coef * entropy + self.args.vf_coef * vf_loss 
 
-        params = U.get_all_params(self.model)
+        # params = U.get_all_params(self.model)
+        params = tf.trainable_variables()
         grads = tf.gradients(loss, params)
         if self.args.max_grad_norm is not None:
             grads, _grad_norm = tf.clip_by_global_norm(grads, self.args.max_grad_norm)
@@ -124,6 +133,10 @@ class PPOCliped(object):
             tf.summary.scalar('clip_frac', self.clip_frac)
             tf.summary.scalar('lr', self.lr_ph)
             tf.summary.scalar('clip_range', self.clip_range_ph)
+
+        for i in range(len(self.model)):
+            for param in self.model[i].all_params:
+                tf.summary.histogram(param.name, param)
 
     def learn(self, traj):
         self.time_step += 1
