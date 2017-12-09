@@ -5,6 +5,8 @@ import sys
 import time
 import os
 import roboschool
+import logger
+import monitor as M
 
 import numpy as np
 import tensorflow as tf
@@ -12,10 +14,6 @@ import utils as U
 
 from collections import deque
 from ppo_cliped import PPOCliped
-from baselines import bench, logger
-from baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
-from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
-from baselines.common.vec_env.vec_normalize import VecNormalize
 
 
 parser = argparse.ArgumentParser(description='proximal policy optimization cliped version')
@@ -116,8 +114,8 @@ class PlayGym(object):
         epinfobuf = deque(maxlen=100)
         tfirststart = time.time()
 
-        lrnow = 3e-4
-        cliprangenow = 0.2
+        lrnow = self.args.lr
+        cliprangenow = self.args.clip_range
         nupdates = total_timesteps//nbatch
         init_targ = 0.012
         kl = 0.01
@@ -229,11 +227,6 @@ def sf01(arr):
     s = arr.shape
     return arr.swapaxes(0, 1).reshape(s[0] * s[1], *s[2:]) 
 
-# def make_env():
-#     env = gym.make(args.gym_id)
-#     env = bench.Monitor(env, logger.get_dir())
-#     return env
-
 
 if __name__ == '__main__':
     curr_path = sys.path[0]
@@ -242,22 +235,20 @@ if __name__ == '__main__':
     config = tf.ConfigProto()
     session = tf.Session(graph=graph, config=config)
 
-    env = gym.make(args.gym_id)
-    ob_space = env.observation_space
-    ac_space = env.action_space
-
     def make_env(rank):
         def _thunk():
             env = gym.make(args.gym_id)
-            env.seed(0 + rank)
-            env = bench.Monitor(env, logger.get_dir() and os.path.join(logger.get_dir(), str(rank)))
+            env.seed(args.seed + rank)
+            env = M.Monitor(env, logger.get_dir() and os.path.join(logger.get_dir(), str(rank)))
             return env
         return _thunk
 
     nenvs = args.num_procs
-    env = SubprocVecEnv([make_env(i) for i in range(nenvs)])
-    env = VecNormalize(env)
+    env = U.SubprocVecEnv([make_env(i) for i in range(nenvs)])
+    env = U.VecNormalize(env)
 
+    ob_space = env.observation_space
+    ac_space = env.action_space
 
     agent = PPOCliped(session, args, ob_space, ac_space)
 
