@@ -8,6 +8,31 @@ import os.path as osp
 
 from gym.core import Wrapper
 
+def sf01(arr):
+    """
+    swap and then flatten axes 0 and 1
+    """
+    s = arr.shape
+    return arr.swapaxes(0, 1).reshape(s[0] * s[1], *s[2:])
+
+def safemean(xs):
+    return np.nan if len(xs) == 0 else np.mean(xs)
+
+def explained_variance(ypred,y):
+    """
+    Computes fraction of variance that ypred explains about y.
+    Returns 1 - Var[y-ypred] / Var[y]
+
+    interpretation:
+        ev=0  =>  might as well have predicted zero
+        ev=1  =>  perfect prediction
+        ev<0  =>  worse than just predicting zero
+
+    """
+    assert y.ndim == 1 and ypred.ndim == 1
+    vary = np.var(y)
+    return np.nan if vary==0 else 1 - np.var(y-ypred)/vary
+
 def get_all_params(model):
     params = []
     for net in model:

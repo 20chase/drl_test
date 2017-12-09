@@ -19,7 +19,6 @@ class PPOCliped(object):
         self._build_ph()
         self.model, self.means, self.value, self.pd, self.act, self.logp = self._build_net()
         self.costs, self.approx_kl, self.clip_frac, self.opt = self._build_training_method()
-        self._build_tensorboard()
 
         self.merge_all = tf.summary.merge_all()
         self.writer = tf.summary.FileWriter('../tensorboard/ppo/{}'.format(
@@ -70,7 +69,7 @@ class PPOCliped(object):
 
         logp = pd.neglogp(act)
 
-        return [actor_net, critic_net], means, value, pd, act, logp
+        return [actor_net, critic_net], means, value[:, 0], pd, act, logp
 
     def _build_training_method(self):
         vpred = self.value
@@ -116,53 +115,7 @@ class PPOCliped(object):
 
         return [pg_loss, vf_loss, entropy, loss], approx_kl, clip_frac, opt
 
-    def _build_tensorboard(self):
-        self.score_tb = tf.placeholder(tf.float32, name='score_tb')
-        mean_v = tf.reduce_mean(self.value)
-
-        with tf.name_scope('loss'):
-            tf.summary.scalar('pg_loss', self.costs[0])
-            tf.summary.scalar('vf_loss', self.costs[1])
-            tf.summary.scalar('entropy', self.costs[2])
-            tf.summary.scalar('total_loss', self.costs[3])
-
-        with tf.name_scope('params'):
-            tf.summary.scalar('score', self.score_tb)
-            tf.summary.scalar('value', mean_v)
-            tf.summary.scalar('approx_kl', self.approx_kl)
-            tf.summary.scalar('clip_frac', self.clip_frac)
-            tf.summary.scalar('lr', self.lr_ph)
-            tf.summary.scalar('clip_range', self.clip_range_ph)
-
-        for i in range(len(self.model)):
-            for param in self.model[i].all_params:
-                tf.summary.histogram(param.name, param)
-
-    def learn(self, traj):
-        self.time_step += 1
-        obses = traj[0]
-        acts = traj[1]
-        rets = traj[2]
-        values = traj[3]
-        logps = traj[4]
-
-        lr = self.args.lr
-        clip_range = self.args.clip_range
-
-        training_size = self.args.num_steps // self.args.num_batchs
-
-        idxs = np.arange(self.args.num_steps)
-        for _ in range(self.args.num_opts):
-            np.random.shuffle(idxs)
-            for start in range(0, self.args.num_steps, training_size):
-                end = start + training_size
-                idx = idxs[start:end]
-                slices = (arr[idx] for arr in (obses, acts, rets, values, logps))
-                self.update(lr, clip_range, *slices)
-
-        self.show(lr, clip_range, obses, acts, rets, values, logps)
-
-    def update(self, lr, clip_range, obses, acts, rets, values, logps):
+    def train(self, lr, clip_range, obses, rets, acts, values, logps):
         # compute advantage
         advs = rets - values
         advs = (advs - advs.mean()) / (advs.std() + 1e-8)
@@ -178,31 +131,9 @@ class PPOCliped(object):
         self.clip_range_ph: clip_range
         }
 
-        self.sess.run(self.opt, feed_dict=feed_dict)
-
-    def show(self, lr, clip_range, obses, acts, rets, values, logps):
-        advs = rets - values
-        advs = (advs - advs.mean()) / (advs.std() + 1e-8)
-
-        feed_dict = {
-        self.obs_ph: obses,
-        self.act_ph: acts,
-        self.adv_ph: advs,
-        self.ret_ph: rets,
-        self.old_vpred_ph: values,
-        self.old_logp_ph: logps,
-        self.lr_ph: lr,
-        self.clip_range_ph: clip_range,
-        self.score_tb: self.score
-        }
-
-        summary, pg_loss, vf_loss, entropy, total_loss, approx_kl, clip_frac = self.sess.run(
-            [self.merge_all, self.costs[0], self.costs[1], self.costs[2], self.costs[3],
-             self.approx_kl, self.clip_frac], feed_dict=feed_dict)
-
-        self.writer.add_summary(summary, self.time_step)
-
-        # return [pg_loss, vf_loss, entropy, total_loss, approx_kl, clip_frac]
+        return self.sess.run(
+        	[self.costs[0], self.costs[1], self.costs[2], 
+        	self.approx_kl, self.clip_frac, self.opt], feed_dict=feed_dict)[:-1]
 
     def step(self, obs):
         feed_dict = {self.obs_ph: obs}

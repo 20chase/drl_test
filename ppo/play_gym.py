@@ -1,13 +1,22 @@
 #! /usr/bin/env python3
 import argparse
 import gym
+import sys
+import time
+import os
 import roboschool
 
 import numpy as np
 import tensorflow as tf
 import utils as U
 
+from collections import deque
 from ppo_cliped import PPOCliped
+from baselines import bench, logger
+from baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
+from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
+from baselines.common.vec_env.vec_normalize import VecNormalize
+
 
 parser = argparse.ArgumentParser(description='proximal policy optimization cliped version')
 
@@ -36,13 +45,13 @@ parser.add_argument(
     '--seed', default=0, type=int, help='RNG seed')
 
 parser.add_argument(
-    '--num_batchs', default=4, type=int, help='the number of batchs')
+    '--num_batchs', default=32, type=int, help='the number of batchs')
 
 parser.add_argument(
     '--num_opts', default=4, type=int, help='the number of opts')
 
 parser.add_argument(
-    '--num_steps', default=2048, type=int, help='the number of steps')
+    '--num_steps', default=512, type=int, help='the number of steps')
 
 parser.add_argument(
     '--num_procs', default=32, type=int, help='the number of processes')
@@ -70,96 +79,165 @@ parser.add_argument(
 
 args = parser.parse_args()
 
-
-def make_env():
-    env = gym.make(args.gym_id)
-    env = U.Monitor(env, '../ppo/{}'.format(args.model_name))
-    return env
-
 class PlayGym(object):
     def __init__(self, args, env, agent):
         self.args = args
         self.env = env
         self.agent = agent
+        self.total_timesteps = self.args.max_steps
+        self.nminibatches = self.args.num_batchs
+        self.nsteps = self.args.num_steps
+        self.gamma = self.args.gamma
+        self.lam = self.args.lamb
+        self.noptepochs = self.args.num_opts
+        nenv = env.num_envs
+        self.obs = np.zeros((nenv,) + env.observation_space.shape)
+        self.obs[:] = env.reset()
+        self.dones = [False for _ in range(nenv)]
 
-    def play(self, max_iters=10000000):
-        obs, done = self._reset()
-        for i in range(max_iters):
-            traj, obs, done = self._sample_traj(obs, done)
-            self.agent.learn(traj)
-            if i % 500 == 0:
-                score = self.test()
-                print ("iter: {} | score: {}".format(i, score))
-                self.agent.score = score
-                if self.args.save_network:
-                    self.agent.save_network(self.args.model_name)
-                obs, done = self._reset()
+    def play(self):
+        env = self.env
+        nsteps = self.nsteps
+        nminibatches = self.nminibatches
+        total_timesteps = self.total_timesteps
+        total_timesteps = int(total_timesteps)
+        noptepochs = self.noptepochs
 
-    def _reset(self):
-        obs = self.env.reset()
-        done = False
-        return obs, done
+        loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac']
+        nenvs = env.num_envs
+        ob_space = env.observation_space
+        ac_space = env.action_space
+        print (" ------------- Shape --------------- ")
+        print ("obs_dim: {} | ac_dim: {}".format(ob_space.shape[0], ac_space.shape[0]))
+        print (" ----------------------------------- ")
+        nbatch = nenvs * nsteps
+        nbatch_train = nbatch // nminibatches
 
-    def _sample_traj(self, obs, done):
-        obses, acts, rews, values, logps, dones = [], [], [], [], [], []
-        for _ in range(self.args.num_steps):
-            obs = np.squeeze(obs)
-            done = np.squeeze(done)
-            obses.append(obs)
-            dones.append(done)
-            act, value, logp = self.agent.step([obs])
-            obs, rew, done, _ = self.env.step(act)
-            act = np.squeeze(act)
-            rew = np.squeeze(rew)
-            value = np.squeeze(value)
-            logp = np.squeeze(logp)
+        epinfobuf = deque(maxlen=100)
+        tfirststart = time.time()
 
-            acts.append(act)
-            rews.append(rew)
-            values.append(value)
-            logps.append(logp)
+        lrnow = 3e-4
+        cliprangenow = 0.2
+        nupdates = total_timesteps//nbatch
+        init_targ = 0.012
+        kl = 0.01
 
-        obs = np.squeeze(obs)
-        done = np.squeeze(done)
+        def adaptive_lr(lr, kl, d_targ):
+            if kl < (d_targ / 1.5):
+                lr *= 2.
+            elif kl > (d_targ * 1.5):
+                lr *= .5
+            return lr
 
-        obses = np.asarray(obses, dtype=np.float32)
-        acts = np.asarray(acts, dtype=np.float32)
-        rews = np.asarray(rews, dtype=np.float32)
-        values = np.asarray(values, dtype=np.float32)
-        logps = np.asarray(logps, dtype=np.float32)
-        dones = np.asarray(dones, dtype=np.bool)
+        for update in range(1, nupdates+1):
+            assert nbatch % nminibatches == 0
+            nbatch_train = nbatch // nminibatches
+            tstart = time.time()
+            frac = 1.0 - (update - 1.0) / nupdates
+            curr_step = update*nbatch
+            step_percent = float(curr_step / total_timesteps)
 
-        last_value = self.agent.get_value([obs])[0]
-
-        rets = np.zeros_like(rews)
-        advs = np.zeros_like(rews)
-        last_gae_lam = 0
-        for t in reversed(range(self.args.num_steps)):
-            if t == (self.args.num_steps - 1):
-                next_no_done = 1. - done
-                next_value = last_value
+            if step_percent < 0.1:
+                d_targ = init_targ
+            elif step_percent < 0.4:
+                d_targ = init_targ / 2.
             else:
-                next_no_done = 1. - dones[t+1]
-                next_value = values[t+1]
+                d_targ = init_targ / 4.
 
-            delta = rews[t] + self.args.gamma * next_value * next_no_done - values[t]
-            advs[t] = last_gae_lam = delta + self.args.gamma * self.args.lamb * next_no_done * last_gae_lam 
+            lrnow = adaptive_lr(lrnow, kl, d_targ)
 
-        rets = advs + values
-        return [obses, acts, rets, values, logps], obs, done
+            obs, returns, masks, actions, values, neglogpacs, states, epinfos = self.run()
+            epinfobuf.extend(epinfos)
+            mblossvals = []
 
-    def test(self):
-        obs = self.env.reset()
-        score = 0
-        done = False
-        while not done:
-            act = self.agent.get_action(obs)
-            obs, rew, done, _ = self.env.step(act)
-            score += np.squeeze(rew)
-        return score
+            inds = np.arange(nbatch)
+            for _ in range(noptepochs):
+                np.random.shuffle(inds)
+                for start in range(0, nbatch, nbatch_train):
+                    end = start + nbatch_train
+                    mbinds = inds[start:end]
+                    slices = (arr[mbinds] for arr in (obs, returns, actions, values, neglogpacs))
+                    mblossvals.append(self.agent.train(lrnow, cliprangenow, *slices))
+                       
+            lossvals = np.mean(mblossvals, axis=0)
+            tnow = time.time()
+            fps = int(nbatch / (tnow - tstart))
+            kl = lossvals[3]
+            if update % 1 == 0 or update == 1:
+                ev = U.explained_variance(values, returns)
+                logger.logkv("serial_timesteps", update*nsteps)
+                logger.logkv("nupdates", update)
+                logger.logkv("total_timesteps", update*nbatch)
+                logger.logkv("fps", fps)
+                logger.logkv("explained_variance", float(ev))
+                logger.logkv('eprewmean', U.safemean([epinfo['r'] for epinfo in epinfobuf]))
+                logger.logkv('eplenmean', U.safemean([epinfo['l'] for epinfo in epinfobuf]))
+                logger.logkv('time_elapsed', tnow - tfirststart)
+                logger.logkv('lr', lrnow)
+                logger.logkv('d_targ', d_targ)
+                for (lossval, lossname) in zip(lossvals, loss_names):
+                    logger.logkv(lossname, lossval)
+                logger.dumpkvs()
+        
+        env.close()
+
+    def run(self):
+        mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [],[],[],[],[],[]
+        mb_states = None
+        epinfos = []
+        for _ in range(self.nsteps):
+            actions, values, neglogpacs = self.agent.step(self.obs)
+            mb_obs.append(self.obs.copy())
+            mb_actions.append(actions)
+            mb_values.append(values)
+            mb_neglogpacs.append(neglogpacs)
+            mb_dones.append(self.dones)            
+            self.obs[:], rewards, self.dones, infos = self.env.step(actions)
+            for info in infos:
+                maybeepinfo = info.get('episode')
+                if maybeepinfo: epinfos.append(maybeepinfo)
+            mb_rewards.append(rewards)
+        #batch of steps to batch of rollouts
+        mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
+        mb_rewards = np.asarray(mb_rewards, dtype=np.float32)
+        mb_actions = np.asarray(mb_actions)
+        mb_values = np.asarray(mb_values, dtype=np.float32)
+        mb_neglogpacs = np.asarray(mb_neglogpacs, dtype=np.float32)
+        mb_dones = np.asarray(mb_dones, dtype=np.bool)
+        last_values = self.agent.get_value(self.obs)
+        #discount/bootstrap off value fn
+        mb_returns = np.zeros_like(mb_rewards)
+        mb_advs = np.zeros_like(mb_rewards)
+        lastgaelam = 0        
+        for t in reversed(range(self.nsteps)):
+            if t == self.nsteps - 1:
+                nextnonterminal = 1.0 - self.dones
+                nextvalues = last_values
+            else:
+                nextnonterminal = 1.0 - mb_dones[t+1]
+                nextvalues = mb_values[t+1]
+            delta = mb_rewards[t] + self.gamma * nextvalues * nextnonterminal - mb_values[t]
+            mb_advs[t] = lastgaelam = delta + self.gamma * self.lam * nextnonterminal * lastgaelam
+        mb_returns = mb_advs + mb_values
+        return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs)), 
+            mb_states, epinfos)
+
+def sf01(arr):
+    """
+    swap and then flatten axes 0 and 1
+    """
+    s = arr.shape
+    return arr.swapaxes(0, 1).reshape(s[0] * s[1], *s[2:]) 
+
+# def make_env():
+#     env = gym.make(args.gym_id)
+#     env = bench.Monitor(env, logger.get_dir())
+#     return env
 
 
 if __name__ == '__main__':
+    curr_path = sys.path[0]
+    logger.configure(dir='{}/log'.format(curr_path))
     graph = tf.get_default_graph()
     config = tf.ConfigProto()
     session = tf.Session(graph=graph, config=config)
@@ -168,8 +246,18 @@ if __name__ == '__main__':
     ob_space = env.observation_space
     ac_space = env.action_space
 
-    env = U.DummyVecEnv([make_env])
-    env = U.VecNormalize(env)
+    def make_env(rank):
+        def _thunk():
+            env = gym.make(args.gym_id)
+            env.seed(0 + rank)
+            env = bench.Monitor(env, logger.get_dir() and os.path.join(logger.get_dir(), str(rank)))
+            return env
+        return _thunk
+
+    nenvs = args.num_procs
+    env = SubprocVecEnv([make_env(i) for i in range(nenvs)])
+    env = VecNormalize(env)
+
 
     agent = PPOCliped(session, args, ob_space, ac_space)
 
