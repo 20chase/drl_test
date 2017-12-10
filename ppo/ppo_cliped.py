@@ -1,4 +1,5 @@
 import time
+import joblib
 
 import numpy as np
 import tensorflow as tf
@@ -132,8 +133,8 @@ class PPOCliped(object):
         }
 
         return self.sess.run(
-        	[self.costs[0], self.costs[1], self.costs[2], 
-        	self.approx_kl, self.clip_frac, self.opt], feed_dict=feed_dict)[:-1]
+            [self.costs[0], self.costs[1], self.costs[2], 
+            self.approx_kl, self.clip_frac, self.opt], feed_dict=feed_dict)[:-1]
 
     def step(self, obs):
         feed_dict = {self.obs_ph: obs}
@@ -149,17 +150,18 @@ class PPOCliped(object):
         feed_dict = {self.obs_ph: obs}
         return self.sess.run(self.means, feed_dict=feed_dict)
 
-    def save_network(self, model_name):
-        for i, network in enumerate(self.model):
-            tl.files.save_npz(network.all_params, 
-                name='../model/ppo/{}_{}.npz'.format(model_name, i),
-                sess=self.sess)
+    def save_network(self, save_path):
+        params = tf.trainable_variables()
+        ps = self.sess.run(params)
+        joblib.dump(ps, save_path)
 
-    def load_network(self, model_name):
-        for i, network in enumerate(self.model):
-            params = tl.files.load_npz(
-                name='../model/ppo/{}_{}.npz'.format(model_name, i))
-            tl.files.assign_params(self.sess, params, network)
+    def load_network(self, load_path):
+        loaded_params = joblib.load(load_path)
+        restores = []
+        params = tf.trainable_variables()
+        for p, loaded_p in zip(params, loaded_params):
+            restores.append(p.assign(loaded_p))
+        self.sess.run(restores)
 
 
 

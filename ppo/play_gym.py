@@ -6,8 +6,9 @@ import time
 import os
 import roboschool
 import logger
-import monitor as M
 
+import monitor as M
+import os.path as osp
 import numpy as np
 import tensorflow as tf
 import utils as U
@@ -43,10 +44,13 @@ parser.add_argument(
     '--seed', default=0, type=int, help='RNG seed')
 
 parser.add_argument(
-    '--num_batchs', default=32, type=int, help='the number of batchs')
+    '--num_batchs', default=4, type=int, help='the number of batchs')
 
 parser.add_argument(
     '--num_opts', default=4, type=int, help='the number of opts')
+
+parser.add_argument(
+    '--save_interval', default=50, type=int, help='the number of save_network')
 
 parser.add_argument(
     '--num_steps', default=512, type=int, help='the number of steps')
@@ -70,7 +74,7 @@ parser.add_argument(
     '--test_alg', default=False, type=bool, help='whether to test our algorithm')
 
 parser.add_argument(
-    '--gym_id', default='RoboschoolAnt-v1', type=str, help='gym id')
+    '--gym_id', default='Ant-v1', type=str, help='gym id')
 
 parser.add_argument(
     '--model_name', default='ppo_cliped', type=str, help='save or load model name')
@@ -93,13 +97,14 @@ class PlayGym(object):
         self.obs[:] = env.reset()
         self.dones = [False for _ in range(nenv)]
 
-    def play(self):
+    def learn(self):
         env = self.env
         nsteps = self.nsteps
         nminibatches = self.nminibatches
         total_timesteps = self.total_timesteps
         total_timesteps = int(total_timesteps)
         noptepochs = self.noptepochs
+        save_interval = self.args.save_interval
 
         loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac']
         nenvs = env.num_envs
@@ -144,7 +149,7 @@ class PlayGym(object):
 
             lrnow = adaptive_lr(lrnow, kl, d_targ)
 
-            obs, returns, masks, actions, values, neglogpacs, states, epinfos = self.run()
+            obs, returns, masks, actions, values, neglogpacs, states, epinfos = self._run()
             epinfobuf.extend(epinfos)
             mblossvals = []
 
@@ -176,10 +181,19 @@ class PlayGym(object):
                 for (lossval, lossname) in zip(lossvals, loss_names):
                     logger.logkv(lossname, lossval)
                 logger.dumpkvs()
+
+            if save_interval and (update % save_interval == 0 or update == 1) and logger.get_dir():
+                checkdir = osp.join(logger.get_dir(), 'checkpoints')
+                os.makedirs(checkdir, exist_ok=True)
+                savepath = osp.join(checkdir, '%.5i'%update)
+                print('Saving to', savepath)
+                self.agent.save_network(savepath)
+                np.save('{}/mean'.format(logger.get_dir()), self.env.ob_rms.mean)
+                np.save('{}/var'.format(logger.get_dir()), self.env.ob_rms.var)
         
         env.close()
 
-    def run(self):
+    def _run(self):
         mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [],[],[],[],[],[]
         mb_states = None
         epinfos = []
@@ -217,16 +231,56 @@ class PlayGym(object):
             delta = mb_rewards[t] + self.gamma * nextvalues * nextnonterminal - mb_values[t]
             mb_advs[t] = lastgaelam = delta + self.gamma * self.lam * nextnonterminal * lastgaelam
         mb_returns = mb_advs + mb_values
-        return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs)), 
+        return (*map(U.sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs)), 
             mb_states, epinfos)
 
-def sf01(arr):
-    """
-    swap and then flatten axes 0 and 1
-    """
-    s = arr.shape
-    return arr.swapaxes(0, 1).reshape(s[0] * s[1], *s[2:]) 
+    def play(self):
+        self.agent.load_network("{}/checkpoints/{}".format(logger.get_dir(), '00600'))
+        def run_episode():
+            obs = self.env.reset()
+            score = 0
+            done = [False]
+            while not done[0]:
+                env.render()
+                act = self.agent.get_action(obs)
+                obs, rew, done, info = env.step(act)
+                score += rew[0]
 
+            return score
+
+        for e in range(10000):
+            score = run_episode()
+            print ('episode: {} | score: {}'.format(e, score))
+
+class MakeEnv(object):
+    def __init__(self, curr_path):
+        self.curr_path = curr_path
+
+    def make_train_env(self):
+        def make_env(rank):
+            def _thunk():
+                env = gym.make(args.gym_id)
+                env.seed(args.seed + rank)
+                env = M.Monitor(env, logger.get_dir() and os.path.join(logger.get_dir(), str(rank)))
+                return env
+            return _thunk
+
+        nenvs = args.num_procs
+        env = U.SubprocVecEnv([make_env(i) for i in range(nenvs)])
+        env = U.VecNormalize(env)
+
+        return env
+
+    def make_test_env(self):
+        def make_env():
+            env = gym.make(args.gym_id)
+            return env
+
+        env = U.DummyVecTestEnv([make_env])
+        running_mean = np.load('{}/log/mean.npy'.format(self.curr_path))
+        running_var = np.load('{}/log/var.npy'.format(self.curr_path))
+        env = U.VecNormalizeTest(env, running_mean, running_var)
+        return env
 
 if __name__ == '__main__':
     curr_path = sys.path[0]
@@ -235,18 +289,10 @@ if __name__ == '__main__':
     config = tf.ConfigProto()
     session = tf.Session(graph=graph, config=config)
 
-    def make_env(rank):
-        def _thunk():
-            env = gym.make(args.gym_id)
-            env.seed(args.seed + rank)
-            env = M.Monitor(env, logger.get_dir() and os.path.join(logger.get_dir(), str(rank)))
-            return env
-        return _thunk
-
-    nenvs = args.num_procs
-    env = U.SubprocVecEnv([make_env(i) for i in range(nenvs)])
-    env = U.VecNormalize(env)
-
+    
+    maker = MakeEnv(curr_path)
+    env = maker.make_test_env()
+    
     ob_space = env.observation_space
     ac_space = env.action_space
 
