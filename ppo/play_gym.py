@@ -6,6 +6,7 @@ import time
 import os
 import roboschool
 import logger
+# import locomotionenv.envs
 
 import monitor as M
 import os.path as osp
@@ -21,6 +22,9 @@ parser = argparse.ArgumentParser(description='proximal policy optimization clipe
 
 parser.add_argument(
     '--lr', default=3e-4, type=float, help='learning rate')
+
+parser.add_argument(
+    '--d_targ', default=0.03, type=float, help='the target of kl divergence')
 
 parser.add_argument(
     '--ent_coef', default=0., type=float, help='the coefficient of entropy')
@@ -59,25 +63,16 @@ parser.add_argument(
     '--num_procs', default=32, type=int, help='the number of processes')
 
 parser.add_argument(
-    '--max_steps', default=10e6, type=int, help='max steps of training')
+    '--max_steps', default=20e6, type=int, help='max steps of training')
 
 parser.add_argument(
-    '--animate', default=False, type=bool, help='whether to animate environment')
+    '--train', default=True, type=bool, help='Whether to train')
 
 parser.add_argument(
-    '--save_network', default=False, type=bool, help='whether to save network')
+    '--point', default='01200', type=str, help='the point for loading')
 
 parser.add_argument(
-    '--load_network', default=False, type=bool, help='whether to load network')
-
-parser.add_argument(
-    '--test_alg', default=False, type=bool, help='whether to test our algorithm')
-
-parser.add_argument(
-    '--gym_id', default='Ant-v1', type=str, help='gym id')
-
-parser.add_argument(
-    '--model_name', default='ppo_cliped', type=str, help='save or load model name')
+    '--gym_id', default='Humanoid-v1', type=str, help='gym id')
 
 args = parser.parse_args()
 
@@ -122,7 +117,7 @@ class PlayGym(object):
         lrnow = self.args.lr
         cliprangenow = self.args.clip_range
         nupdates = total_timesteps//nbatch
-        init_targ = 0.012
+        init_targ = self.args.d_targ
         kl = 0.01
 
         def adaptive_lr(lr, kl, d_targ):
@@ -234,8 +229,8 @@ class PlayGym(object):
         return (*map(U.sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs)), 
             mb_states, epinfos)
 
-    def play(self):
-        self.agent.load_network("{}/checkpoints/{}".format(logger.get_dir(), '00600'))
+    def play(self, curr_path):
+        self.agent.load_network("{}/log/checkpoints/{}".format(curr_path, self.args.point))
         def run_episode():
             obs = self.env.reset()
             score = 0
@@ -256,7 +251,14 @@ class MakeEnv(object):
     def __init__(self, curr_path):
         self.curr_path = curr_path
 
+    def make(self, train=True):
+        if train:
+            return self.make_train_env()
+        else:
+            return self.make_test_env()
+
     def make_train_env(self):
+        logger.configure(dir='{}/log'.format(curr_path))
         def make_env(rank):
             def _thunk():
                 env = gym.make(args.gym_id)
@@ -284,21 +286,25 @@ class MakeEnv(object):
 
 if __name__ == '__main__':
     curr_path = sys.path[0]
-    logger.configure(dir='{}/log'.format(curr_path))
     graph = tf.get_default_graph()
     config = tf.ConfigProto()
     session = tf.Session(graph=graph, config=config)
 
+    # make env
+    maker = MakeEnv(curr_path) 
+    env = maker.make(args.train)
     
-    maker = MakeEnv(curr_path)
-    env = maker.make_test_env()
-    
+    # build agent
     ob_space = env.observation_space
     ac_space = env.action_space
-
     agent = PPOCliped(session, args, ob_space, ac_space)
 
+    # build player
     player = PlayGym(args, env, agent)
 
+    # start
     session.run(tf.global_variables_initializer())
-    player.play()
+    if args.train:
+        player.learn()
+    else:
+        player.play(curr_path)
