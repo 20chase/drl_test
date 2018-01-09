@@ -1,8 +1,8 @@
-##There are some Reinforcement Learning programs by chase.
+## There are some Reinforcement Learning programs by chase.
 
-##Environment: Ubuntu 16.04 LTS
+## Environment: Ubuntu 16.04 LTS
 
-##dependences
+## dependences
 
 * tensorflow
 * tensorlayer
