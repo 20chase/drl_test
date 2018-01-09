@@ -69,7 +69,7 @@ parser.add_argument(
     '--train', default=True, type=bool, help='Whether to train')
 
 parser.add_argument(
-    '--point', default='00001', type=str, help='the point for loading')
+    '--point', default='00500', type=str, help='the point for loading')
 
 parser.add_argument(
     '--gym_id', default='Ant-v1', type=str, help='gym id')

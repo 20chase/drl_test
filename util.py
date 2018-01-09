@@ -1,6 +1,5 @@
 import time
 import itchat
-import ray
 
 from selenium import webdriver
 
