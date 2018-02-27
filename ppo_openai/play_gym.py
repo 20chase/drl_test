@@ -4,9 +4,7 @@ import gym
 import sys
 import time
 import os
-import roboschool
 import logger
-import locomotionenv.envs
 
 import monitor as M
 import os.path as osp
@@ -24,7 +22,7 @@ parser.add_argument(
     '--lr', default=3e-4, type=float, help='learning rate')
 
 parser.add_argument(
-    '--d_targ', default=0.0012, type=float, help='the target of kl divergence')
+    '--d_targ', default=0.012, type=float, help='the target of kl divergence')
 
 parser.add_argument(
     '--ent_coef', default=0., type=float, help='the coefficient of entropy')
@@ -63,7 +61,7 @@ parser.add_argument(
     '--num_procs', default=32, type=int, help='the number of processes')
 
 parser.add_argument(
-    '--max_steps', default=10e6, type=int, help='max steps of training')
+    '--max_steps', default=20e6, type=int, help='max steps of training')
 
 parser.add_argument(
     '--train', default=True, type=bool, help='Whether to train')
@@ -72,7 +70,7 @@ parser.add_argument(
     '--point', default='00001', type=str, help='the point for loading')
 
 parser.add_argument(
-    '--gym_id', default='Ant-v1', type=str, help='gym id')
+    '--gym_id', default='Ant-v2', type=str, help='gym id')
 
 args = parser.parse_args()
 

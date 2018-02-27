@@ -14,7 +14,7 @@ def df_plot(dfs, x, ys, ylim=None, legend_loc='best'):
     plt.show()
 
 def main():
-    filepath='./ppo/log/progress.csv'
+    filepath='./ppo_dm/log/progress.csv'
     dataframes = []
 
     data = pd.read_csv(filepath)
