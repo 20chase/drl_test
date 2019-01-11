@@ -1,9 +1,3 @@
-# author: fan tingxiang
-# data: 2017-5-17
-# e-mail: ftx1994@foxmail.com
-# theme: policy gradient
-#-----------------------------
-
 # dependences
 import gym
 import time
