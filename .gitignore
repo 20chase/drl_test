@@ -2,4 +2,5 @@
 *.pyc
 *.py~
 .cache
-
+tensorboard/
+td3/log/
