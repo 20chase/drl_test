@@ -39,13 +39,14 @@ class ReplayBuffer:
 
 class SAC(object):
     def __init__(self, sess, args, 
-                 obs_dim, act_dim,
+                 obs_dim, act_dim, act_scale,
                  alpha=0.2):
 
         self.sess = sess
         self.args = args
         self.obs_dim = obs_dim
         self.act_dim = act_dim
+        self.act_scale = act_scale
         self.alpha = 0.2
 
         self.tau = 0.995
@@ -158,6 +159,9 @@ class SAC(object):
             mu, pi, logp_pi = mlp_gaussian_policy(
                 x, a, hidden_sizes, activation, output_activation)
             mu, pi, logp_pi = apply_squashing_func(mu, pi, logp_pi)
+
+        mu *= self.act_scale
+        pi *= self.act_scale
             
         # vfs
         vf_mlp = lambda x : tf.squeeze(mlp(x, list(hidden_sizes)+[1], activation, None), axis=1)
@@ -248,21 +252,19 @@ class SAC(object):
         return self.sess.run(act_op, feed_dict=feed_dict)
 
     def save_net(self, save_path):
-        params = []
-        params += tf.get_collection(
-            tf.GraphKeys.TRAINABLE_VARIABLES, scope="main"
-        )
+        def get_vars(scope):
+            return [x for x in tf.global_variables() if scope in x.name]
+        params = get_vars("main")
         
         ps = self.sess.run(params)
         joblib.dump(ps, save_path)
 
     def load_net(self, load_path):
+        def get_vars(scope):
+            return [x for x in tf.global_variables() if scope in x.name]
         loaded_params = joblib.load(load_path)
         restores = []
-        params = []
-        params += tf.get_collection(
-            tf.GraphKeys.TRAINABLE_VARIABLES, scope="main"
-        )
+        params = get_vars("main")
         
         for p, loaded_p in zip(params, loaded_params):
             restores.append(p.assign(loaded_p))

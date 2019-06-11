@@ -192,13 +192,16 @@ class VecNormalize(VecEnv):
             self.ret_rms.update(self.ret)
             rews = np.clip(rews / np.sqrt(self.ret_rms.var + self.epsilon), -self.cliprew, self.cliprew)
         return obs, rews, news, infos
+
     def _obfilt(self, obs):
         if self.ob_rms: 
+            print("ob_rms")
             self.ob_rms.update(obs)
             obs = np.clip((obs - self.ob_rms.mean) / np.sqrt(self.ob_rms.var + self.epsilon), -self.clipob, self.clipob)
             return obs
         else:
             return obs
+
     def reset(self):
         """
         Reset all environments
