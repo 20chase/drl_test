@@ -58,7 +58,7 @@ class PlayGym(object):
 
     def learn(self, 
               start_steps=10000, 
-              steps_per_epoch=1000, 
+              steps_per_epoch=5000, 
               epochs=50,
               max_ep_len=1000):
 
@@ -139,7 +139,7 @@ if __name__ == '__main__':
     session.run(tf.global_variables_initializer())
     session.run(agent.target_init)
     if args.load:
-        agent.load_net("./log/4.0")
+        agent.load_net("./log/149")
     if args.train:
         player.learn(epochs=300)
     else:
