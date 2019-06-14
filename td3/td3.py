@@ -42,8 +42,7 @@ class TD3(object):
         self.args = args
         self.obs_dim = obs_dim
         self.act_dim = act_dim
-
-        self.theta = args.theta
+        
         self.sigma = args.sigma
 
         self.tau = 0.995
@@ -64,8 +63,7 @@ class TD3(object):
             a2 = self.act_target + epsilon
             _, self.q1_targ, self.q2_targ, _ = self._build_net(self.new_obs_ph, a2)
 
-        self.td_error, \
-        self.critic_loss, self.critic_opt, self.actor_opt, \
+        self.actor_opt, self.critic_opt, \
         self.target_init, self.target_update = self._build_training_method()
 
         self.replay_buffer = ReplayBuffer(
@@ -151,68 +149,36 @@ class TD3(object):
                tf.squeeze(q1_pi, axis=1)
 
     def _build_training_method(self):
+        def get_vars(scope):
+            return [x for x in tf.global_variables() if scope in x.name]
+
         min_q_targ = tf.minimum(self.q1_targ, self.q2_targ)
         backup = tf.stop_gradient(
             self.rew_ph + self.args.gamma*(1-self.done_ph)*min_q_targ)
-            
-        with tf.variable_scope('td_error'):
-            td_error = min_q_targ - backup
         
-        with tf.variable_scope('q1_loss'):
-            q1_loss = tf.reduce_mean(
-                self.weights_ph * (self.q1 - backup) ** 2
-            )
+        pi_loss = -tf.reduce_mean(self.q1_pi)
+        q1_loss = tf.reduce_mean((self.q1 - backup) ** 2)
+        q2_loss = tf.reduce_mean((self.q2 - backup) ** 2)
+        q_loss = q1_loss + q2_loss
 
-        with tf.variable_scope('q2_loss'):
-            q2_loss = tf.reduce_mean(
-                self.weights_ph * (self.q2 - backup) **2
-            )
+        q_optimizer = tf.train.AdamOptimizer(self.args.critic_lr)
+        pi_optimizer = tf.train.AdamOptimizer(self.args.actor_lr)
 
-        with tf.variable_scope('q_loss'):
-            q_loss = q1_loss + q2_loss
-
-        with tf.variable_scope("actor_loss"):
-            actor_loss = -tf.reduce_mean(self.q1_pi)
-
-        critic_param = tf.get_collection(
-            tf.GraphKeys.TRAINABLE_VARIABLES, scope="main/q"
+        train_pi_op = pi_optimizer.minimize(
+            pi_loss, var_list=get_vars("main/pi"))
+        train_q_op = q_optimizer.minimize(
+            q_loss, var_list=get_vars("main/q")
         )
 
-        actor_param = tf.get_collection(
-            tf.GraphKeys.TRAINABLE_VARIABLES, scope="main/pi"
-        )
+        # Polyak averaging for target variables
+        target_update = tf.group([tf.assign(v_targ, self.tau*v_targ + (1-self.tau)*v_main)
+                                    for v_main, v_targ in zip(get_vars('main'), get_vars('target'))])
 
-        critic_opt = tf.train.AdamOptimizer(
-            self.args.critic_lr).minimize(
-                q_loss, var_list=critic_param)
+        # Initializing targets to match main variables
+        target_init = tf.group([tf.assign(v_targ, v_main)
+                                    for v_main, v_targ in zip(get_vars('main'), get_vars('target'))])
 
-        actor_opt = tf.train.AdamOptimizer(
-            self.args.actor_lr).minimize(
-                actor_loss, var_list=actor_param)
-
-        # update target network
-        eval_vars, target_vars = [], []
-
-        eval_vars += tf.get_collection(
-            tf.GraphKeys.TRAINABLE_VARIABLES, scope="main"
-        )
-
-        eval_vars += tf.get_collection(
-            tf.GraphKeys.TRAINABLE_VARIABLES, scope="target"
-        )
-
-
-        target_init = tf.group(
-            [tf.assign(v_targ, v_main)
-            for v_main, v_targ in zip(eval_vars, target_vars)]
-        )
-        target_update = tf.group(
-            [tf.assign(v_targ, self.tau*v_targ + (1-self.tau)*v_main)
-            for v_main, v_targ in zip(eval_vars, target_vars)]
-        )
-
-        return td_error, \
-               q_loss, critic_opt, actor_opt, \
+        return train_pi_op, train_q_op, \
                target_init, target_update
 
     def perceive(self, obs, acts, rews, new_obs, dones):
@@ -227,29 +193,28 @@ class TD3(object):
                     obs[i], acts[i], rews[i], new_obs[i], done
                 )
                 
-    def train(self):
-        self.time_step += 1
+    def train(self, iters):
+        for i in range(iters):
+            batch = self.replay_buffer.sample_batch(self.args.batch_size)
 
-        batch = self.replay_buffer.sample_batch(self.args.batch_size)
+            feed_dict = {
+            self.obs_ph: batch['obs1'],
+            self.new_obs_ph: batch['obs2'],
+            self.act_ph: batch['acts'],
+            self.rew_ph: batch['rews'],
+            self.done_ph: batch['done']
+            }
 
-        feed_dict = {
-        self.obs_ph: batch['obs1'],
-        self.new_obs_ph: batch['obs2'],
-        self.act_ph: batch['acts'],
-        self.rew_ph: batch['rews'],
-        self.done_ph: batch['done']
-        }
-
-        self.sess.run(
-            self.critic_opt,
-            feed_dict=feed_dict)
-
-        self.sess.run(
-            [self.actor_opt, self.target_update], 
-            feed_dict=feed_dict)
+            self.sess.run(
+                self.critic_opt,
+                feed_dict=feed_dict)
+            if i % 2 == 0:
+                self.sess.run(
+                    [self.actor_opt, self.target_update], 
+                    feed_dict=feed_dict)
 
     def ou_noise(self):
-        return self.sigma * np.random.randn(self.args.nenvs, self.act_dim)
+        return self.sigma * np.random.randn(self.act_dim)
         
     def action(self, obs, test=False):
         feed_dict =  {self.obs_ph: obs}
@@ -260,21 +225,19 @@ class TD3(object):
             return np.clip(acts + self.ou_noise(), -1.0, 1.0)
 
     def save_net(self, save_path):
-        params = []
-        params += tf.get_collection(
-            tf.GraphKeys.TRAINABLE_VARIABLES, scope="main"
-        )
+        def get_vars(scope):
+            return [x for x in tf.global_variables() if scope in x.name]
+        params = get_vars("main")
         
         ps = self.sess.run(params)
         joblib.dump(ps, save_path)
 
     def load_net(self, load_path):
+        def get_vars(scope):
+            return [x for x in tf.global_variables() if scope in x.name]
         loaded_params = joblib.load(load_path)
         restores = []
-        params = []
-        params += tf.get_collection(
-            tf.GraphKeys.TRAINABLE_VARIABLES, scope="main"
-        )
+        params = get_vars("main")
         
         for p, loaded_p in zip(params, loaded_params):
             restores.append(p.assign(loaded_p))

@@ -18,37 +18,25 @@ parser.add_argument(
     '--train', action='store_true')
 
 parser.add_argument(
-    '--actor_lr', default=1e-4, type=float, help='actor learning rate')
+    '--actor_lr', default=1e-3, type=float, help='actor learning rate')
 
 parser.add_argument(
     '--critic_lr', default=1e-3, type=float, help='critic learning rate')
 
 parser.add_argument(
-    '--beta', default=0.4, type=float, help='prioritized replay buffer hyperparameter')
-
-parser.add_argument(
-    '--alpha', default=0.6, type=float, help='prioritized replay buffer hyperparameter')
-
-parser.add_argument(
     '--gamma', default=.99, type=float, help='gamma')
 
 parser.add_argument(
-    '--sigma', default=0.2, type=float)
-
-parser.add_argument(
-    '--theta', default=0.15, type=float)
+    '--sigma', default=0.1, type=float)
 
 parser.add_argument(
     '--nenvs', default=16, type=int, help='the number of processes')
 
 parser.add_argument(
-    '--batch_size', default=1024, type=int, help='training batch size')
+    '--batch_size', default=100, type=int, help='training batch size')
 
 parser.add_argument(
-    '--update_target_num', default=400, type=int, help='the frequence of updating target network')
-
-parser.add_argument(
-    '--buffer_size', default=1000000, type=int, help='the size of replay buffer')
+    '--replay_size', default=1000000, type=int, help='the size of replay buffer')
 
 parser.add_argument(
     '--max_steps', default=500000, type=int, help='max steps of training')
@@ -60,10 +48,10 @@ parser.add_argument(
     '--save', default=False, type=bool, help='whether to save network')
 
 parser.add_argument(
-    '--load', default=False, type=bool, help='whether to load network')
+    '--load', action='store_true')
 
 parser.add_argument(
-    '--gym_id', default='HalfCheetah-v3', type=str, help='gym id')
+    '--gym_id', default='Humanoid-v3', type=str, help='gym id')
 
 parser.add_argument(
     '--seed', default=0, type=int)
@@ -85,16 +73,16 @@ class PlayGym(object):
 
     def learn(self, 
               start_steps=10000, 
-              steps_per_epoch=1000, 
-              epochs=50,
+              steps_per_epoch=10000, 
+              epochs=5000,
               max_ep_len=1000):
 
         ob = self.train_env.reset()
         ep_len = 0
         ep_ret = 0
 
-        total_steps = steps_per_epoch * epochs
-        for t in range(total_steps):
+        total_steps = steps_per_epoch * epochs + 1
+        for t in range(1, total_steps):
             if t > start_steps:
                 act = self.agent.action([ob])[0]
             else:
@@ -111,8 +99,7 @@ class PlayGym(object):
             ob = new_ob
 
             if done or (ep_len == max_ep_len):
-                for j in range(ep_len):
-                    self.agent.train()
+                self.agent.train(ep_len)
 
                 print("time_step {}: {}".format(t, ep_ret))
 
@@ -165,6 +152,8 @@ if __name__ == '__main__':
 
     session.run(tf.global_variables_initializer())
     session.run(agent.target_init)
+    if args.load:
+        agent.load_net("./log/4")
     if args.train:
         player.learn()
     else:
