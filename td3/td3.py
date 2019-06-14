@@ -5,8 +5,38 @@ import numpy as np
 import tensorflow as tf
 import utils as U
 
+class ReplayBuffer:
+    """
+    A simple FIFO experience replay buffer for SAC agents.
+    """
 
-class PrioritizedDDPG(object):
+    def __init__(self, obs_dim, act_dim, size):
+        self.obs1_buf = np.zeros([size, obs_dim], dtype=np.float32)
+        self.obs2_buf = np.zeros([size, obs_dim], dtype=np.float32)
+        self.acts_buf = np.zeros([size, act_dim], dtype=np.float32)
+        self.rews_buf = np.zeros(size, dtype=np.float32)
+        self.done_buf = np.zeros(size, dtype=np.float32)
+        self.ptr, self.size, self.max_size = 0, 0, size
+
+    def store(self, obs, act, rew, next_obs, done):
+        self.obs1_buf[self.ptr] = obs
+        self.obs2_buf[self.ptr] = next_obs
+        self.acts_buf[self.ptr] = act
+        self.rews_buf[self.ptr] = rew
+        self.done_buf[self.ptr] = done
+        self.ptr = (self.ptr+1) % self.max_size
+        self.size = min(self.size+1, self.max_size)
+
+    def sample_batch(self, batch_size=32):
+        idxs = np.random.randint(0, self.size, size=batch_size)
+        return dict(obs1=self.obs1_buf[idxs],
+                    obs2=self.obs2_buf[idxs],
+                    acts=self.acts_buf[idxs],
+                    rews=self.rews_buf[idxs],
+                    done=self.done_buf[idxs])
+
+
+class TD3(object):
     def __init__(self, sess, args, obs_dim, act_dim):
         self.sess = sess
         self.args = args
@@ -17,11 +47,6 @@ class PrioritizedDDPG(object):
         self.sigma = args.sigma
 
         self.tau = 0.995
-
-        self.buffer = U.PrioritizedReplayBuffer(
-            self.args.buffer_size, alpha=self.args.alpha)
-        self.speed_beta = (1. - self.args.beta) / self.args.max_steps
-        self.beta = self.args.beta
 
         self.time_step = 0
         self.counter = 0
@@ -42,13 +67,9 @@ class PrioritizedDDPG(object):
         self.td_error, \
         self.critic_loss, self.critic_opt, self.actor_opt, \
         self.target_init, self.target_update = self._build_training_method()
-        
-        self._build_tensorboard()
 
-        self.merge_all = tf.summary.merge_all()
-        self.writer = tf.summary.FileWriter('../tensorboard/td3/{}'.format(
-            time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))),
-            self.sess.graph)
+        self.replay_buffer = ReplayBuffer(
+            obs_dim=obs_dim, act_dim=act_dim, size=args.replay_size)
 
     def _build_ph(self):
         self.obs_ph = tf.placeholder(
@@ -194,24 +215,7 @@ class PrioritizedDDPG(object):
                q_loss, critic_opt, actor_opt, \
                target_init, target_update
 
-    def _build_tensorboard(self):
-        self.score_tb = tf.placeholder(
-            tf.float32, name='score_tb')
-        self.size_tb = tf.placeholder(
-            tf.float32, name='size_tb')
-        self.beta_tb = tf.placeholder(
-            tf.float32, name='beta_tb')
-
-        with tf.name_scope('loss'):
-            tf.summary.scalar('critic_loss', self.critic_loss)
-
-        with tf.name_scope('params'):
-            tf.summary.scalar('score', self.score_tb)
-            tf.summary.scalar('buffer_size', self.size_tb)
-            tf.summary.scalar('beta', self.beta_tb)
-
     def perceive(self, obs, acts, rews, new_obs, dones):
-        self.counter += 1
         if self.args.train:
             for i in range(len(dones)):
                 if dones[i]:
@@ -219,37 +223,30 @@ class PrioritizedDDPG(object):
                 else:
                     done = 0.0
 
-                self.buffer.add(
+                self.replay_buffer.store(
                     obs[i], acts[i], rews[i], new_obs[i], done
                 )
                 
     def train(self):
         self.time_step += 1
-        for i in range(20):
-            self.beta += self.speed_beta
-            experience = self.buffer.sample(self.args.batch_size, self.beta)
-            (obses, acts, rews, new_obses, dones, weights, idxes) = experience
 
-            feed_dict = {
-            self.obs_ph: obses,
-            self.new_obs_ph: new_obses,
-            self.act_ph: acts,
-            self.rew_ph: rews,
-            self.done_ph: dones,
-            self.weights_ph: weights
-            }
+        batch = self.replay_buffer.sample_batch(self.args.batch_size)
 
-            td_error, _ = self.sess.run(
-                [self.td_error, self.critic_opt],
-                feed_dict=feed_dict)
+        feed_dict = {
+        self.obs_ph: batch['obs1'],
+        self.new_obs_ph: batch['obs2'],
+        self.act_ph: batch['acts'],
+        self.rew_ph: batch['rews'],
+        self.done_ph: batch['done']
+        }
 
-            if i % 2 == 0:
-                self.sess.run(
-                    [self.actor_opt, self.target_update], 
-                    feed_dict=feed_dict)
+        self.sess.run(
+            self.critic_opt,
+            feed_dict=feed_dict)
 
-            new_priorities = np.abs(td_error) + 1e-6
-            self.buffer.update_priorities(idxes, new_priorities)
+        self.sess.run(
+            [self.actor_opt, self.target_update], 
+            feed_dict=feed_dict)
 
     def ou_noise(self):
         return self.sigma * np.random.randn(self.args.nenvs, self.act_dim)
