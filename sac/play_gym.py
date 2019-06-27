@@ -24,7 +24,7 @@ parser.add_argument(
     '--nenvs', default=5, type=int, help='the number of processes')
 
 parser.add_argument(
-    '--batch_size', default=100, type=int, help='training batch size')
+    '--batch_size', default=1024, type=int, help='training batch size')
 
 parser.add_argument(
     '--replay_size', default=1000000, type=int, help='the size of replay buffer')
@@ -59,7 +59,7 @@ class PlayGym(object):
     def learn(self, 
               start_steps=10000, 
               steps_per_epoch=5000, 
-              epochs=50,
+              epochs=1000,
               max_ep_len=1000):
 
         ob = self.train_env.reset()
@@ -83,8 +83,8 @@ class PlayGym(object):
 
             ob = new_ob
 
-            if done or (ep_len == max_ep_len):
-                for j in range(ep_len):
+            if done or (ep_len==max_ep_len):
+                for _ in range(int(ep_len / 10)):
                     self.agent.train()
 
                 print("time_step {}: {}".format(t, ep_ret))
@@ -93,7 +93,7 @@ class PlayGym(object):
                 ep_len = 0
                 ep_ret = 0
 
-            if t % 10000 == 0:
+            if t % 100000 == 0:
                 self.agent.save_net("./log/{}".format(int(t / 10000)))
 
     def play(self):
@@ -139,9 +139,9 @@ if __name__ == '__main__':
     session.run(tf.global_variables_initializer())
     session.run(agent.target_init)
     if args.load:
-        agent.load_net("./log/149")
+        agent.load_net("./log/290")
     if args.train:
-        player.learn(epochs=300)
+        player.learn(epochs=3000)
     else:
         for _ in range(100):
             player.play()

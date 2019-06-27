@@ -40,7 +40,7 @@ class ReplayBuffer:
 class SAC(object):
     def __init__(self, sess, args, 
                  obs_dim, act_dim, act_scale,
-                 alpha=0.2):
+                 alpha=0.1):
 
         self.sess = sess
         self.args = args
@@ -49,7 +49,7 @@ class SAC(object):
         self.act_scale = act_scale
         self.alpha = 0.2
 
-        self.tau = 0.995
+        self.tau = 0.95
 
         self.time_step = 0
         self.counter = 0

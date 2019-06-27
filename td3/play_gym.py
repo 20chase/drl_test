@@ -72,7 +72,7 @@ class PlayGym(object):
         self.nsteps = 200
 
     def learn(self, 
-              start_steps=10000, 
+              start_steps=100000, 
               steps_per_epoch=10000, 
               epochs=5000,
               max_ep_len=1000):
@@ -143,6 +143,7 @@ if __name__ == '__main__':
 
     ob_space = train_env.observation_space
     ac_space = train_env.action_space
+    ac_high = ac_space.high[0]
 
     agent = TD3(session, args, 
         ob_space.shape[0], ac_space.shape[0])

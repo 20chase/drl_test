@@ -42,7 +42,7 @@ class TD3(object):
         self.args = args
         self.obs_dim = obs_dim
         self.act_dim = act_dim
-        
+
         self.sigma = args.sigma
 
         self.tau = 0.995
@@ -103,7 +103,7 @@ class TD3(object):
             x = tf.layers.dense(
                 x, units=300, activation=tf.nn.relu
                 )
-            means = tf.layers.dense(
+            means = 0.4 * tf.layers.dense(
                 x, units=self.act_dim, activation=tf.nn.tanh
                 )
 
@@ -222,7 +222,7 @@ class TD3(object):
         if test:
             return acts
         else:
-            return np.clip(acts + self.ou_noise(), -1.0, 1.0)
+            return np.clip(acts + self.ou_noise(), -0.4, 0.4)
 
     def save_net(self, save_path):
         def get_vars(scope):
